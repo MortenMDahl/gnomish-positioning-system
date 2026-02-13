@@ -1,0 +1,9 @@
+## Interface: 110007, 110100
+## Title: Gnomish Positioning System
+## Notes: High Resolution Map Replacement Framework
+## Author: Antigravity
+## Version: 1.0.0
+## SavedVariables: GnomishPositioningSystemDB
+
+MapData.lua
+Core.lua

@@ -1,0 +1,10 @@
+# Generated Tiles (Large 600MB payload)
+Interface/AddOns/GnomishPositioningSystem/Tiles/
+
+# Build/Export artifacts
+deploy_log.txt
+deploy_log.txt.bak
+
+# Local research/system files
+deep-research.md
+.gemini/
