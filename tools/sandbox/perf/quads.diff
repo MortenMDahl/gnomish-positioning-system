@@ -1,0 +1,182 @@
+--- prototypes/GPS3D/GPS3D.lua
++++ prototypes/GPS3D/GPS3D.lua (one texture per grid cell)
+@@ -326,6 +326,13 @@
+ 	if tex.r ~= 1 or tex.g ~= 1 or tex.b ~= 1 then tex:SetVertexColor(1, 1, 1); tex.r, tex.g, tex.b = 1, 1, 1 end
+ end
+ 
++local function SetQuadTexture(t, file, ua, va, ub, vb, uc, vc, ud, vd)
++	local tex = t.tex
++	if tex.file ~= file then tex:SetTexture(file); tex.file = file end
++	tex:SetTexCoord(ua, va, ub, vb, uc, vc, ud, vd)
++	if tex.r ~= 1 or tex.g ~= 1 or tex.b ~= 1 then tex:SetVertexColor(1, 1, 1); tex.r, tex.g, tex.b = 1, 1, 1 end
++end
++
+ local function SetTriColour(t, r, g, b)
+ 	local tex = t.tex
+ 	if tex.file ~= WHITE then tex:SetTexture(WHITE); tex.file = WHITE; tex:SetTexCoord(0, 1, 0, 1) end
+@@ -352,31 +359,31 @@
+ 	local file, au, av, aw, ah
+ 	if step <= MINIMAP_STEP then file = MinimapFile(map, tx, ty) end
+ 	if file then au, av, aw, ah = 0, 0, 1, 1 else file, au, av, aw, ah = OverviewOf(map, tx, ty) end
+-	local tris, nTris = {}, 0
++	-- one texture per cell: a quad with its four corners at the cell's corners (upper left = north-west
++	-- a, lower left = south-west b, upper right = north-east c, lower right = south-east d); half the
++	-- textures and SetVertexOffset calls of two triangles. The client folds the quad along its own
++	-- diagonal (GridHeight assumes north-west to south-east).
++	local tris, nQuads = {}, 0
+ 	local row = n + 1
+-	local mesh = { map = map, tx = tx, ty = ty, tkey = ty * 64 + tx, step = step, n = n, vx = vx, vy = vy, vh = vh, h = h, tris = tris, px = {}, py = {}, pd = {}, edges = -1, fixed = fixed }
++	local mesh = { map = map, tx = tx, ty = ty, tkey = ty * 64 + tx, step = step, n = n, vx = vx, vy = vy, vh = vh, h = h, tris = tris, quads = true, nTris = 2 * n * n, px = {}, py = {}, pd = {}, edges = -1, fixed = fixed }
+ 	local uScale, vScale = aw / TILE, ah / TILE
++	local half = step * CELL / 2
+ 	for j = 0, n - 1 do
+ 		for i = 0, n - 1 do
+-			local v00 = j * row + i + 1
+-			local v10, v01, v11 = v00 + 1, v00 + row, v00 + row + 1
+-			-- (00, 01, 11) and (00, 11, 10): front faces seen from above
+-			for q = 1, 2 do
+-				local a, b, c
+-				if q == 1 then a, b, c = v00, v01, v11 else a, b, c = v00, v11, v10 end
+-				local t = { a = a, b = b, c = c, tex = AcquireTex(), bucket = -1, frame = 1, shown = false, mesh = mesh }
+-				-- building block under the triangle's centre (it is drawn behind a building block there)
+-				local ex = (vx[a] + vx[b] + vx[c]) / 3 - x0
+-				local sy = y0 - (vy[a] + vy[b] + vy[c]) / 3
+-				t.blk = min(BLOCKS - 1, floor(sy / BLOCK)) * BLOCKS + min(BLOCKS - 1, floor(ex / BLOCK))
+-				if file then
+-					SetTriTexture(t, file, au + (vx[a] - x0) * uScale, av + (y0 - vy[a]) * vScale, au + (vx[b] - x0) * uScale, av + (y0 - vy[b]) * vScale, au + (vx[c] - x0) * uScale, av + (y0 - vy[c]) * vScale)
+-				else
+-					SetTriColour(t, 0.35, 0.42, 0.3)
+-				end
+-				nTris = nTris + 1
+-				tris[nTris] = t
++			local a = j * row + i + 1
++			local c, b, d = a + 1, a + row, a + row + 1
++			local t = { a = a, b = b, c = c, d = d, tex = AcquireTex(), bucket = -1, frame = 1, shown = false, mesh = mesh }
++			-- building block under the cell's centre (it is drawn behind a building block there)
++			local ex = vx[a] + half - x0
++			local sy = y0 - vy[a] + half
++			t.blk = min(BLOCKS - 1, floor(sy / BLOCK)) * BLOCKS + min(BLOCKS - 1, floor(ex / BLOCK))
++			if file then
++				SetQuadTexture(t, file, au + (vx[a] - x0) * uScale, av + (y0 - vy[a]) * vScale, au + (vx[b] - x0) * uScale, av + (y0 - vy[b]) * vScale, au + (vx[c] - x0) * uScale, av + (y0 - vy[c]) * vScale, au + (vx[d] - x0) * uScale, av + (y0 - vy[d]) * vScale)
++			else
++				SetTriColour(t, 0.35, 0.42, 0.3)
+ 			end
++			nQuads = nQuads + 1
++			tris[nQuads] = t
+ 		end
+ 	end
+ 	return mesh
+@@ -872,7 +879,7 @@
+ 			nActive = nActive + 1
+ 			active[nActive] = mesh
+ 			lastUse[key] = now
+-			stats.tris = stats.tris + #mesh.tris
++			stats.tris = stats.tris + mesh.nTris
+ 			stats.steps[step] = (stats.steps[step] or 0) + 1
+ 		end
+ 	end
+@@ -1017,6 +1024,58 @@
+ 	for i = 1, nActive do
+ 		local mesh = active[i]
+ 		local px, py, pd, under, tris = mesh.px, mesh.py, mesh.pd, mesh.under, mesh.tris
++		if mesh.quads then
++			for k = 1, #tris do
++				local t = tris[k]
++				local a, b, c, d = t.a, t.b, t.c, t.d
++				local da, db, dc, dd = pd[a], pd[b], pd[c], pd[d]
++				if da > NEAR and db > NEAR and dc > NEAR and dd > NEAR then
++					local ax, ay, bx, by, cx_, cy_, dx_, dy_ = px[a], py[a], px[b], py[b], px[c], py[c], px[d], py[d]
++					-- drawn unless both halves (a b d, a d c) face away
++					if (bx - ax) * (dy_ - ay) - (dx_ - ax) * (by - ay) > 0 or (dx_ - ax) * (cy_ - ay) - (cx_ - ax) * (dy_ - ay) > 0 then
++						nVisible = nVisible + 1
++						visible[nVisible] = t
++						local tex = t.tex
++						local depth = (da + db + dc + dd) / 4
++						if under and under[t.blk] then depth = depth + DETAIL_BIAS end
++						local bucket = floor((dmax - depth) * scale)
++						if bucket < 0 then bucket = 0 elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
++						if bucket ~= t.bucket or tex.bucketFrame ~= t.frame then
++							t.bucket = bucket
++							local f = floor(bucket / LAYER_BUCKETS) + 1
++							local inner = bucket % LAYER_BUCKETS
++							if f ~= tex.bucketFrame then tex:SetParent(bucketFrames[f]); tex.bucketFrame = f; t.x1, t.x2, t.x3, t.x4 = nil, nil, nil, nil end -- sent again below
++							t.frame = f
++							tex:SetDrawLayer(LAYERS[floor(inner / 16) + 1], inner % 16 - 8)
++						end
++						-- a corner whose vertex kept its screen position needs no SetVertexOffset
++						if ax ~= t.x1 or ay ~= t.y1 then
++							SetVertexOffset(tex, 1, ax + 0.5, ay - 0.5) -- upper left  = a (north-west)
++							t.x1, t.y1 = ax, ay
++						end
++						if bx ~= t.x2 or by ~= t.y2 then
++							SetVertexOffset(tex, 2, bx + 0.5, by + 0.5) -- lower left  = b (south-west)
++							t.x2, t.y2 = bx, by
++						end
++						if cx_ ~= t.x3 or cy_ ~= t.y3 then
++							SetVertexOffset(tex, 3, cx_ - 0.5, cy_ - 0.5) -- upper right = c (north-east)
++							t.x3, t.y3 = cx_, cy_
++						end
++						if dx_ ~= t.x4 or dy_ ~= t.y4 then
++							SetVertexOffset(tex, 4, dx_ - 0.5, dy_ + 0.5) -- lower right = d (south-east)
++							t.x4, t.y4 = dx_, dy_
++						end
++						if not t.shown then t.shown = true; tex:Show() end
++					else
++						culled = culled + 1
++						if t.shown then t.shown = false; t.tex:Hide() end
++					end
++				else
++					behind = behind + 1
++					if t.shown then t.shown = false; t.tex:Hide() end
++				end
++			end
++		else
+ 		for k = 1, #tris do
+ 			local t = tris[k]
+ 			local a, b, c = t.a, t.b, t.c
+@@ -1027,6 +1086,18 @@
+ 					nVisible = nVisible + 1
+ 					visible[nVisible] = t
+ 					local tex = t.tex
++					local depth = (da + db + dc) / 3
++					if under and under[t.blk] then depth = depth + DETAIL_BIAS end
++					local bucket = floor((dmax - depth) * scale)
++					if bucket < 0 then bucket = 0 elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
++					if bucket ~= t.bucket or tex.bucketFrame ~= t.frame then
++						t.bucket = bucket
++						local f = floor(bucket / LAYER_BUCKETS) + 1
++						local inner = bucket % LAYER_BUCKETS
++						if f ~= tex.bucketFrame then tex:SetParent(bucketFrames[f]); tex.bucketFrame = f; t.x1, t.x2, t.x3 = nil, nil, nil end -- sent again below
++						t.frame = f
++						tex:SetDrawLayer(LAYERS[floor(inner / 16) + 1], inner % 16 - 8)
++					end
+ 					-- a corner whose vertex kept its screen position needs no SetVertexOffset
+ 					if ax ~= t.x1 or ay ~= t.y1 then
+ 						SetVertexOffset(tex, 1, ax + 0.5, ay - 0.5) -- upper left  = a
+@@ -1041,18 +1112,6 @@
+ 						SetVertexOffset(tex, 4, cx_ - 0.5, cy_ + 0.5) -- lower right pinned onto c
+ 						t.x3, t.y3 = cx_, cy_
+ 					end
+-					local depth = (da + db + dc) / 3
+-					if under and under[t.blk] then depth = depth + DETAIL_BIAS end
+-					local bucket = floor((dmax - depth) * scale)
+-					if bucket < 0 then bucket = 0 elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
+-					if bucket ~= t.bucket or tex.bucketFrame ~= t.frame then
+-						t.bucket = bucket
+-						local f = floor(bucket / LAYER_BUCKETS) + 1
+-						local inner = bucket % LAYER_BUCKETS
+-						if f ~= tex.bucketFrame then tex:SetParent(bucketFrames[f]); tex.bucketFrame = f end
+-						t.frame = f
+-						tex:SetDrawLayer(LAYERS[floor(inner / 16) + 1], inner % 16 - 8)
+-					end
+ 					if not t.shown then t.shown = true; tex:Show() end
+ 				else
+ 					culled = culled + 1
+@@ -1063,6 +1122,7 @@
+ 				if t.shown then t.shown = false; t.tex:Hide() end
+ 			end
+ 		end
++		end
+ 	end
+ 	for n = nVisible + 1, #visible do visible[n] = nil end
+ 	stats.shown, stats.culled, stats.behind = nVisible, culled, behind

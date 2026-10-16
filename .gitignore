@@ -8,3 +8,16 @@ deploy_log.txt.bak
 # Local research/system files
 deep-research.md
 .gemini/
+
+# Old pre-cut tiles, moved out of the addon (regenerable from maps/ with legacy/map_processor.py)
+legacy/Tiles/
+
+# Stale leftovers, not used by anything (safe to delete)
+prototypes/GPS3D/Data/Detail_0_5.lua
+prototypes/GPS3D/Data/Northshire.lua
+data/sw_test.json
+tools/sandbox/perf/minimap_extra.zip.bak
+
+# Python caches
+__pycache__/
+*.pyc

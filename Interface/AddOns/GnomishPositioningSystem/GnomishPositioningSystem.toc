@@ -1,9 +1,9 @@
-## Interface: 110007, 110100
+## Interface: 16001
 ## Title: Gnomish Positioning System
-## Notes: High Resolution Map Replacement Framework
-## Author: Antigravity
-## Version: 1.0.0
+## Notes: A zoomable top-down map of the real world, built from the game's own minimap images. /gps
+## Author: Morten
+## Version: 0.3.0
 ## SavedVariables: GnomishPositioningSystemDB
 
-MapData.lua
+Data\MapTiles.lua
 Core.lua

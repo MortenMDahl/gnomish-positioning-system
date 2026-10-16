@@ -1,0 +1,788 @@
+<title>GPS Sandbox</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Marcellus&display=swap">
+<style>
+/* Layout: a game screen beside (or above, on phones) a player panel and a chat log, like sitting at the client. */
+:root {
+  --ink: #0d1116;          /* page */
+  --slate: #161c24;        /* panels */
+  --slate-2: #1f2731;      /* raised */
+  --line: #2c3743;
+  --text: #dfe5ec;
+  --muted: #8e9aa8;
+  --gold: #f2c94c;         /* WoW gold, the one accent */
+  --gold-dim: #9c7c22;
+  --ok: #6fcf7f;
+  --warn: #f2a14c;
+  --err: #f26b5b;
+  --font-ui: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-game: "Marcellus", Georgia, serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--ink); color: var(--text); font-family: var(--font-ui); font-size: 15px; }
+.app { height: 100%; display: flex; flex-direction: column; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 10px; gap: 10px; box-sizing: border-box; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.brand h1 { margin: 0; white-space: nowrap; font-family: var(--font-game); font-weight: 400; font-size: 22px; color: var(--gold); letter-spacing: 0.02em; }
+.brand span { color: var(--muted); font-size: 14px; }
+.status { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.status b { color: var(--text); font-weight: 500; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+button, select { font: inherit; font-size: 14px; color: var(--text); background: var(--slate-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+button:hover { border-color: var(--gold-dim); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+button.on { border-color: var(--gold); color: var(--gold); }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 10px; }
+.screen { position: relative; min-width: 0; min-height: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: radial-gradient(ellipse at 50% 40%, #233142 0%, #121a23 70%); touch-action: none; }
+.screen canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.screen .world { position: absolute; left: 14px; top: 10px; font-family: var(--font-mono); font-size: 11px; color: #5d6b7a; pointer-events: none; }
+#boot { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; color: var(--muted); font-size: 15px; }
+#boot strong { display: block; color: var(--gold); font-family: var(--font-game); font-weight: 400; font-size: 20px; margin-bottom: 6px; }
+.side { display: flex; flex-direction: column; gap: 10px; min-height: 0; min-width: 0; }
+.panel { background: var(--slate); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.panel h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.readout { font-family: var(--font-mono); font-size: 12px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.readout .k { color: var(--muted); }
+.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.row + .row { margin-top: 8px; }
+.row select { flex: 1; min-width: 0; }
+.hint { color: var(--muted); font-size: 13px; line-height: 1.4; margin: 8px 0 0; }
+kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; color: var(--text); background: var(--slate-2); }
+.pad { display: grid; grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(2, 40px); gap: 4px; }
+.pad button { padding: 0; font-size: 16px; user-select: none; -webkit-user-select: none; touch-action: none; }
+.chat { flex: 1; display: flex; flex-direction: column; min-height: 160px; }
+#log { flex: 1; min-height: 0; overflow-y: auto; font-family: var(--font-mono); font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; padding-right: 4px; }
+#log .sys { color: var(--muted); }
+#cmd { display: flex; gap: 6px; margin-top: 8px; }
+#cmdline { flex: 1; min-width: 0; font: inherit; font-family: var(--font-mono); font-size: 13px; color: var(--text); background: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+.quick { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.quick button { font-family: var(--font-mono); font-size: 11px; padding: 3px 6px; }
+details.panel summary { cursor: pointer; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+details.panel ul { margin: 8px 0 0; padding-left: 18px; color: var(--text); font-size: 13px; line-height: 1.45; }
+details.panel li { margin-bottom: 4px; }
+details.panel .real { color: var(--ok); }
+details.panel .fake { color: var(--warn); }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
+@media (max-width: 860px) {
+  main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(360px, 62vh) auto; overflow-y: auto; }
+  .app { height: auto; min-height: 100%; }
+  .chat { min-height: 220px; }
+  .status { margin-left: 0; width: 100%; white-space: normal; }
+  .status .kind { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="app">
+  <header>
+    <div class="brand"><h1>GPS Sandbox</h1><span>the real addon code, without the game</span></div>
+    <div class="status" id="status">starting…</div>
+    <div class="actions">
+      <button id="btn-map" title="The key binding: toggle the map (M)">Map <kbd>M</kbd></button>
+      <button id="btn-3d" title="Open the 3D view (/gps3d)">3D view</button>
+      <button id="btn-reload" title="Reload both addons, keeping saved settings">Reload</button>
+      <button id="btn-reset" title="Forget saved window positions and settings, then reload">Reset settings</button>
+    </div>
+  </header>
+  <main>
+    <section class="screen" id="screen" aria-label="Game screen">
+      <canvas id="gl"></canvas>
+      <div class="world">game world (simulated)</div>
+      <div id="boot"><div><strong>Loading the sandbox</strong>Starting a Lua VM and the two addons…</div></div>
+    </section>
+    <aside class="side">
+      <div class="panel">
+        <h2>You (simulated player)</h2>
+        <div class="readout" id="you">—</div>
+        <div class="row">
+          <select id="teleport" aria-label="Go to a place">
+            <optgroup label="Eastern Kingdoms">
+            <option value="ns-front">Northshire, in front of the abbey</option>
+            <option value="ns-inside">Northshire, inside the abbey</option>
+            <option value="goldshire">Goldshire</option>
+            <option value="stormwind">Stormwind, Valley of Heroes</option>
+            <option value="sw-trade">Stormwind, Trade District</option>
+            <option value="sw-cathedral">Stormwind, Cathedral Square</option>
+            <option value="sw-mage">Stormwind, Mage Quarter</option>
+            <option value="westfall">Westfall, Sentinel Hill</option>
+            <option value="westfall-ne">Westfall, north-east (Jangolode Mine)</option>
+            <option value="ironforge">Dun Morogh, Ironforge gates</option>
+            <option value="bootybay">Stranglethorn, Booty Bay</option>
+            <option value="lordaeron">Tirisfal, ruins of Lordaeron</option>
+            <option value="stratholme">Eastern Plaguelands, Stratholme gates</option>
+            </optgroup>
+            <optgroup label="Kalimdor">
+            <option value="orgrimmar">Durotar, Orgrimmar</option>
+            <option value="crossroads">The Barrens, Crossroads</option>
+            <option value="bloodhoof">Mulgore, Bloodhoof Village</option>
+            <option value="teldrassil">Teldrassil, Dolanaar</option>
+            <option value="thunderbluff">Mulgore, Thunder Bluff</option>
+            </optgroup>
+            <optgroup label="Other maps">
+            <option value="wsg">Warsong Gulch</option>
+            <option value="av">Alterac Valley</option>
+            <option value="ab">Arathi Basin</option>
+            <option value="zg">Zul'Gurub</option>
+            <option value="zephras">Zephras Isle (no 3D terrain)</option>
+            <option value="instance">Inside a dungeon (no position)</option>
+            </optgroup>
+          </select>
+          <button id="btn-go">Go</button>
+        </div>
+        <div class="row">
+          <div class="pad" aria-label="Walk">
+            <button data-k="turnL" aria-label="Turn left">↺</button>
+            <button data-k="fwd" aria-label="Walk forward">▲</button>
+            <button data-k="turnR" aria-label="Turn right">↻</button>
+            <button data-k="left" aria-label="Strafe left">◀</button>
+            <button data-k="back" aria-label="Walk back">▼</button>
+            <button data-k="right" aria-label="Strafe right">▶</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label class="toggle"><input type="checkbox" id="loop"> Walk a loop</label>
+            <label class="toggle"><input type="checkbox" id="touchRight"> Touch drags with the right button</label>
+          </div>
+        </div>
+        <p class="hint"><kbd>W</kbd><kbd>S</kbd> walk, <kbd>A</kbd><kbd>D</kbd> turn, <kbd>Q</kbd><kbd>E</kbd> strafe, <kbd>Esc</kbd> closes the map. On the map: drag, right-drag (tilt from 30&deg; to straight down), wheel; the 90&deg; button under the compass locks the view straight down. On a phone: drag with one finger; with two fingers pinch to zoom and twist or slide to turn and tilt.</p>
+      </div>
+      <div class="panel chat">
+        <h2>Chat</h2>
+        <div id="log" aria-live="polite"></div>
+        <form id="cmd"><input id="cmdline" autocomplete="off" spellcheck="false" placeholder="/gps test" aria-label="Chat command"><button type="submit">Send</button></form>
+        <div class="quick">
+          <button data-cmd="/gps test">/gps test</button>
+          <button data-cmd="/gps grid">/gps grid</button>
+          <button data-cmd="/gps3d test">/gps3d test</button>
+          <button data-cmd="/gps3d pretend">/gps3d pretend</button>
+          <button data-cmd="/gps3d marker arrow">marker arrow</button>
+          <button data-cmd="/gps3d marker both">marker both</button>
+          <button data-cmd="/gps3d trees">/gps3d trees</button>
+          <button data-cmd="/gps3d detail off">buildings off</button>
+          <button data-cmd="/gps3d detail on">buildings on</button>
+          <button data-cmd="/gps3d buildings 2000">2000</button>
+          <button data-cmd="/gps3d buildings 4000">4000</button>
+          <button data-cmd="/gps3d buildings 8000">8000</button>
+        </div>
+      </div>
+      <details class="panel">
+        <summary>What this tests, and what it can't</summary>
+        <ul>
+          <li class="real">Real: the addon files themselves (Core.lua, GPS3D.lua and their data), unchanged, in a real Lua VM.</li>
+          <li class="real">Real: the 3D terrain of every map that has outdoor terrain (heights from the game files, 16.7 yards apart), and the buildings of the whole world (54 MB of meshes, loaded at start as the game would; "buildings off/on" and 2000/4000/8000 set how many building triangles a frame may draw).</li>
+          <li class="real">Real: the game's own minimap images for 131 tiles around Elwynn, Stormwind, Westfall, Redridge and Duskwood; elsewhere the sandbox shows the overview images the addon ships, so close-ups are blurrier than in the game.</li>
+          <li class="fake">Simulated: the WoW UI engine (frames, anchors, layers, mouse), your position and facing, zone names and map coordinates.</li>
+          <li class="fake">Not testable here: whether the game lets addons load minimap images by file ID, the real character model (a block figure stands in), the ModelScene's real camera conventions, and real frame times. Loaded counts in the self-tests describe the sandbox, not the game.</li>
+          <li class="fake">Lua here is 5.4; the game uses 5.1. The sandbox imitates 5.1 where the addon depends on it (number formatting).</li>
+        </ul>
+      </details>
+    </aside>
+  </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/dist/index.js"></script>
+<!--FENGARI-->
+<script>
+"use strict";
+(() => {
+const TILE = 1600 / 3;
+const ADDONS = [
+  { name: "GnomishPositioningSystem", files: ["Data/MapTiles.lua", "Core.lua"], saved: "GnomishPositioningSystemDB" },
+  { name: "GPS3D", files: ["Data/World_0.lua", "Data/World_1.lua", "Data/World_30.lua", "Data/World_33.lua", "Data/World_36.lua", "Data/World_47.lua", "Data/World_169.lua", "Data/World_209.lua", "Data/World_289.lua", "Data/World_309.lua", "Data/World_329.lua", "Data/World_469.lua", "Data/World_489.lua", "Data/World_509.lua", "Data/World_529.lua", "Data/World_531.lua", "Data/Detail_0_1.lua", "Data/Detail_0_2.lua", "Data/Detail_0_3.lua", "Data/Detail_0_4.lua", "Data/Detail_1_1.lua", "Data/Detail_1_2.lua", "Data/Detail_1_3.lua", "Data/Detail_1_4.lua", "Data/Detail_30.lua", "Data/Detail_33.lua", "Data/Detail_36.lua", "Data/Detail_47.lua", "Data/Detail_209.lua", "Data/Detail_289.lua", "Data/Detail_309.lua", "Data/Detail_329.lua", "Data/Detail_469.lua", "Data/Detail_489.lua", "Data/Detail_509.lua", "Data/Detail_529.lua", "Data/Detail_531.lua", "GPS3D.lua"], saved: "GPS3D_DB" },
+];
+const STORE_KEY = "gps-sandbox-saved-v1";
+const $ = (id) => document.getElementById(id);
+const canvas = $("gl"), screen = $("screen"), logEl = $("log");
+
+// ---------------------------------------------------------------------------------------------
+// Chat log (|cffRRGGBB colour codes like the game)
+// ---------------------------------------------------------------------------------------------
+function chatLine(text, cls) {
+  const div = document.createElement("div");
+  if (cls) div.className = cls;
+  let rest = text, color = null;
+  const re = /\|c([0-9a-fA-F]{8})|\|r/g;
+  let last = 0, m;
+  const add = (s) => { if (!s) return; const span = document.createElement("span"); span.textContent = s; if (color) span.style.color = color; div.appendChild(span); };
+  while ((m = re.exec(rest))) { add(rest.slice(last, m.index)); color = m[1] ? "#" + m[1].slice(2) : null; last = re.lastIndex; }
+  add(rest.slice(last));
+  logEl.appendChild(div);
+  while (logEl.childNodes.length > 400) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+const sys = (t) => chatLine(t, "sys");
+
+// ---------------------------------------------------------------------------------------------
+// Lua runtime: wasmoon (Lua 5.4 in WebAssembly), Fengari (Lua 5.3 in JavaScript) as a fallback
+// ---------------------------------------------------------------------------------------------
+async function makeLua() {
+  try {
+    if (!window.wasmoon) throw new Error("wasmoon script did not load");
+    const factory = new wasmoon.LuaFactory("wasmoon/glue.wasm");
+    const lua = await factory.createEngine({ injectObjects: false, enableProxy: false, traceAllocations: false });
+    const fns = {};
+    return {
+      kind: "Lua 5.4 (WebAssembly)",
+      run: (code, name) => lua.doStringSync(code),
+      setFn: (name, fn) => lua.global.set(name, fn),
+      call: (name, ...args) => { let f = fns[name]; if (!f) f = fns[name] = lua.global.get(name); return f(...args); },
+      close: () => lua.global.close(),
+    };
+  } catch (e) {
+    sys("WebAssembly Lua unavailable (" + e.message + "); using the slower JavaScript Lua.");
+    if (!window.fengari) throw new Error("no Lua runtime could start in this browser (" + e.message + ")");
+    const { lua, lauxlib, lualib, to_luastring, to_jsstring } = window.fengari;
+    const L = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(L);
+    const check = (st) => { if (st !== lua.LUA_OK) { const msg = to_jsstring(lua.lua_tolstring(L, -1)); lua.lua_pop(L, 1); throw new Error(msg); } };
+    const push = (v) => {
+      if (v === undefined || v === null) lua.lua_pushnil(L);
+      else if (typeof v === "number") lua.lua_pushnumber(L, v);
+      else if (typeof v === "boolean") lua.lua_pushboolean(L, v);
+      else lua.lua_pushstring(L, to_luastring(String(v)));
+    };
+    const read = (i) => {
+      const t = lua.lua_type(L, i);
+      if (t === lua.LUA_TNUMBER) return lua.lua_tonumber(L, i);
+      if (t === lua.LUA_TSTRING) return to_jsstring(lua.lua_tolstring(L, i));
+      if (t === lua.LUA_TBOOLEAN) return lua.lua_toboolean(L, i);
+      return null;
+    };
+    return {
+      kind: "Lua 5.3 (JavaScript, slower)",
+      run: (code, name) => { check(lauxlib.luaL_loadbuffer(L, to_luastring(code), null, to_luastring("=" + (name || "chunk")))); check(lua.lua_pcall(L, 0, 0, 0)); },
+      setFn: (name, fn) => { lua.lua_pushjsfunction(L, (L2) => { const n = lua.lua_gettop(L2); const args = []; for (let i = 1; i <= n; i++) args.push(read(i)); push(fn(...args)); return 1; }); lua.lua_setglobal(L, to_luastring(name)); },
+      call: (name, ...args) => { lua.lua_getglobal(L, to_luastring(name)); args.forEach(push); check(lua.lua_pcall(L, args.length, 1, 0)); const r = read(-1); lua.lua_pop(L, 1); return r; },
+      close: () => {},
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Files
+// ---------------------------------------------------------------------------------------------
+const sources = {};
+async function fetchText(path) { const r = await fetch(path); if (!r.ok) throw new Error(path + ": HTTP " + r.status); return r.text(); }
+async function loadSources() {
+  const list = ["engine.lua"];
+  for (const a of ADDONS) for (const f of a.files) list.push(`addons/${a.name}/${f}`);
+  await Promise.all(list.map(async (p) => { sources[p] = await fetchText(p); }));
+}
+const HIRES = new Set(["0_26_44","0_26_45","0_26_46","0_26_47","0_26_48","0_26_49","0_26_50","0_26_51","0_26_52","0_26_53","0_26_54","0_27_43","0_27_44","0_27_45","0_27_46","0_27_47","0_27_48","0_27_49","0_27_50","0_27_51","0_27_52","0_27_53","0_27_54","0_28_43","0_28_44","0_28_45","0_28_46","0_28_47","0_28_48","0_28_49","0_28_50","0_28_51","0_28_52","0_28_53","0_28_54","0_29_43","0_29_44","0_29_45","0_29_46","0_29_47","0_29_48","0_29_49","0_29_50","0_29_51","0_29_52","0_29_53","0_29_54","0_30_43","0_30_44","0_30_45","0_30_46","0_30_47","0_30_48","0_30_49","0_30_50","0_30_51","0_30_52","0_30_53","0_30_54","0_31_43","0_31_44","0_31_45","0_31_46","0_31_47","0_31_48","0_31_49","0_31_50","0_31_51","0_31_52","0_31_53","0_31_54","0_32_43","0_32_44","0_32_45","0_32_46","0_32_47","0_32_48","0_32_49","0_32_50","0_32_51","0_32_52","0_32_53","0_32_54","0_33_43","0_33_44","0_33_45","0_33_46","0_33_47","0_33_48","0_33_49","0_33_50","0_33_51","0_33_52","0_33_53","0_33_54","0_34_43","0_34_44","0_34_45","0_34_46","0_34_47","0_34_48","0_34_49","0_34_50","0_34_51","0_34_52","0_34_53","0_34_54","0_35_43","0_35_44","0_35_45","0_35_46","0_35_47","0_35_48","0_35_49","0_35_50","0_35_51","0_35_52","0_35_53","0_35_54","0_36_43","0_36_44","0_36_45","0_36_46","0_36_47","0_36_48","0_36_49","0_36_50","0_36_51","0_36_52","0_36_53","0_36_54"]);
+
+// ---------------------------------------------------------------------------------------------
+// Simulated player
+// ---------------------------------------------------------------------------------------------
+// Positions are approximate (world X north, Y west, yards); the zone names are shown as given.
+const PLACES = {
+  "ns-front": { X: -8958.3, Y: -190, map: 0, facing: 0.3, zone: "Elwynn Forest", sub: "Northshire Valley" },
+  "ns-inside": { X: -8897.3, Y: -178, map: 0, facing: 0, zone: "Elwynn Forest", sub: "Northshire Abbey" },
+  "goldshire": { X: -9464, Y: 62, map: 0, facing: 1.6, zone: "Elwynn Forest", sub: "Goldshire" },
+  "stormwind": { X: -8913, Y: 554, map: 0, facing: 0.65, zone: "Stormwind City", sub: "Valley of Heroes" },
+  "sw-trade": { X: -8830, Y: 640, map: 0, facing: 2.3, zone: "Stormwind City", sub: "Trade District" },
+  "sw-cathedral": { X: -8520, Y: 850, map: 0, facing: 0.6, zone: "Stormwind City", sub: "Cathedral Square" },
+  "sw-mage": { X: -8980, Y: 880, map: 0, facing: 2.3, zone: "Stormwind City", sub: "Mage Quarter" },
+  "westfall": { X: -10628, Y: 1037, map: 0, facing: 0, zone: "Westfall", sub: "Sentinel Hill" },
+  "westfall-ne": { X: -9800, Y: 1400, map: 0, facing: 0.3, zone: "Westfall", sub: "Jangolode Mine" },
+  "ironforge": { X: -5000, Y: -830, map: 0, facing: 1.0, zone: "Dun Morogh", sub: "Gates of Ironforge" },
+  "bootybay": { X: -14300, Y: 440, map: 0, facing: 2.2, zone: "Stranglethorn Vale", sub: "Booty Bay" },
+  "lordaeron": { X: 1800, Y: 230, map: 0, facing: 0, zone: "Tirisfal Glades", sub: "Ruins of Lordaeron" },
+  "stratholme": { X: 3300, Y: -3380, map: 0, facing: 0, zone: "Eastern Plaguelands", sub: "Stratholme" },
+  "orgrimmar": { X: 1630, Y: -4380, map: 1, facing: 0, zone: "Orgrimmar", sub: "" },
+  "crossroads": { X: -450, Y: -2650, map: 1, facing: 0, zone: "The Barrens", sub: "The Crossroads" },
+  "bloodhoof": { X: -2350, Y: -350, map: 1, facing: 0, zone: "Mulgore", sub: "Bloodhoof Village" },
+  "teldrassil": { X: 9940, Y: 2290, map: 1, facing: 0, zone: "Teldrassil", sub: "Dolanaar" },
+  "thunderbluff": { X: -1280, Y: 130, map: 1, facing: 0, zone: "Thunder Bluff", sub: "" },
+  "wsg": { X: 1600, Y: 1600, map: 489, facing: 0, zone: "Warsong Gulch", sub: "" },
+  "av": { X: -266.7, Y: -266.7, map: 30, facing: 0, zone: "Alterac Valley", sub: "" },
+  "ab": { X: 1066.7, Y: 1066.7, map: 529, facing: 0, zone: "Arathi Basin", sub: "" },
+  "zg": { X: -12000, Y: -1866.7, map: 309, facing: 0, zone: "Zul'Gurub", sub: "" },
+  "zephras": { X: (32 - 29.5) * TILE, Y: (32 - 25.5) * TILE, map: 2991, facing: 0, zone: "Zephras Isle", sub: "" },
+  "instance": { X: 0, Y: 0, map: null, facing: 0, zone: "The Deadmines", sub: "" },
+};
+const player = { X: PLACES["ns-front"].X, Y: PLACES["ns-front"].Y, map: 0, facing: 0.3, zone: "Elwynn Forest", sub: "Northshire Valley" };
+const keys = new Set();
+function zoneOf(p) {
+  if (p.map === null) return { zone: p.zone, sub: "", ui: null };
+  const gx = 32 - p.Y / TILE, gy = 32 - p.X / TILE;
+  // zone names come from the last place you went to; map coordinates are made up (fractions of the
+  // 4 x 4 tiles around you), for the footer only
+  return { zone: p.zone, sub: p.sub, ui: 1429, mx: ((gx % 4) + 4) % 4 / 4, my: ((gy % 4) + 4) % 4 / 4 };
+}
+function stepPlayer(dt) {
+  if (player.map === null) return;
+  const run = 7, turn = 2.6;
+  let f = 0, s = 0, t = 0;
+  if (keys.has("fwd")) f += 1;
+  if (keys.has("back")) f -= 0.6;
+  if (keys.has("left")) s -= 1;
+  if (keys.has("right")) s += 1;
+  if (keys.has("turnL")) t += 1;
+  if (keys.has("turnR")) t -= 1;
+  if ($("loop").checked) { f = 1; t = 0.32; }
+  player.facing = ((player.facing + t * turn * dt) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+  // facing 0 = north (+X), counter-clockwise; X north, Y west
+  const fx = Math.cos(player.facing), fy = Math.sin(player.facing);
+  player.X += (fx * f + fy * s) * run * dt;
+  player.Y += (fy * f - fx * s) * run * dt;
+}
+
+// ---------------------------------------------------------------------------------------------
+// WebGL renderer for the engine's draw list
+// ---------------------------------------------------------------------------------------------
+const gl = canvas.getContext("webgl", { alpha: true, antialias: true, premultipliedAlpha: false });
+if (!gl) throw new Error("WebGL is not available in this browser");
+const prog = (() => {
+  const vs = `attribute vec2 p; attribute vec2 t; attribute vec4 c; uniform vec2 s; varying vec2 vt; varying vec4 vc;
+    void main(){ gl_Position = vec4(p.x / s.x * 2.0 - 1.0, p.y / s.y * 2.0 - 1.0, 0.0, 1.0); vt = t; vc = c; }`;
+  const fs = `precision mediump float; uniform sampler2D tex; uniform vec4 uvr; varying vec2 vt; varying vec4 vc;
+    void main(){ gl_FragColor = texture2D(tex, uvr.xy + vt * uvr.zw) * vc; }`;
+  const mk = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
+  const p = gl.createProgram(); gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  return p;
+})();
+gl.useProgram(prog);
+const loc = { p: gl.getAttribLocation(prog, "p"), t: gl.getAttribLocation(prog, "t"), c: gl.getAttribLocation(prog, "c"), s: gl.getUniformLocation(prog, "s"), uvr: gl.getUniformLocation(prog, "uvr"), tex: gl.getUniformLocation(prog, "tex") };
+const MAXQ = 12000;
+const vbuf = gl.createBuffer(), ibuf = gl.createBuffer();
+const vdata = new ArrayBuffer(MAXQ * 4 * 20), vf = new Float32Array(vdata), vu = new Uint8Array(vdata);
+(() => { const idx = new Uint16Array(MAXQ * 6); for (let i = 0; i < MAXQ; i++) { idx.set([i * 4, i * 4 + 1, i * 4 + 2, i * 4 + 2, i * 4 + 1, i * 4 + 3], i * 6); } gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW); })();
+gl.bindBuffer(gl.ARRAY_BUFFER, vbuf);
+gl.bufferData(gl.ARRAY_BUFFER, vdata.byteLength, gl.DYNAMIC_DRAW);
+gl.enableVertexAttribArray(loc.p); gl.vertexAttribPointer(loc.p, 2, gl.FLOAT, false, 20, 0);
+gl.enableVertexAttribArray(loc.t); gl.vertexAttribPointer(loc.t, 2, gl.FLOAT, false, 20, 8);
+gl.enableVertexAttribArray(loc.c); gl.vertexAttribPointer(loc.c, 4, gl.UNSIGNED_BYTE, true, 20, 16);
+gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+gl.uniform1i(loc.tex, 0);
+
+// Textures
+const textures = new Map();   // key -> { tex, ready, uvr: [u0, v0, du, dv] }
+let fdidInfo = new Map();     // fdid -> { map, x, y, atlas: {file, x0, y0, w, h} }
+let lua = null;
+function makeGLTexture(img, opts = {}) {
+  const t = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+  const w = img.width, h = img.height, pot = (w & (w - 1)) === 0 && (h & (h - 1)) === 0;
+  if (pot && opts.mip) { gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); }
+  else gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  const wrap = pot && opts.repeat ? gl.REPEAT : gl.CLAMP_TO_EDGE;
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, wrap);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wrap);
+  return t;
+}
+const solid = (r, g, b, a) => { const c = document.createElement("canvas"); c.width = c.height = 2; const x = c.getContext("2d"); x.fillStyle = `rgba(${r},${g},${b},${a})`; x.fillRect(0, 0, 2, 2); return makeGLTexture(c); };
+const WHITE = solid(255, 255, 255, 1);
+const MISSING = (() => { const c = document.createElement("canvas"); c.width = c.height = 8; const x = c.getContext("2d"); x.fillStyle = "#1f8f2f"; x.fillRect(0, 0, 8, 8); x.fillStyle = "#30d050"; x.fillRect(0, 0, 4, 4); x.fillRect(4, 4, 4, 4); return makeGLTexture(c); })();
+const imageCache = new Map(); // url -> { tex, ready, waiters }
+// Calls onReady(entry) once the image is a GL texture (at once if it already is).
+function loadImage(url, opts, onReady) {
+  let e = imageCache.get(url);
+  if (!e) {
+    e = { tex: null, ready: false, failed: false, waiters: [] };
+    imageCache.set(url, e);
+    const img = new Image();
+    img.onload = () => { e.tex = makeGLTexture(img, opts); e.ready = true; const w = e.waiters; e.waiters = []; w.forEach((f) => f(e)); needDraw = true; };
+    img.onerror = () => { e.failed = true; needDraw = true; sys("[sandbox] could not load " + url); };
+    img.src = url;
+  }
+  if (e.ready) onReady(e); else e.waiters.push(onReady);
+}
+const UI_FILES = {
+  "interface\\minimap\\minimaparrow": "ui/minimaparrow.png",
+  "interface\\tooltips\\ui-tooltip-border": "ui/ui-tooltip-border.png",
+  "interface\\minimap\\minimap-trackingborder": "ui/minimap-trackingborder.png",
+  "interface\\chatframe\\ui-chatim-sizegrabber-up": "ui/sizegrabber-up.png",
+  "interface\\chatframe\\ui-chatim-sizegrabber-highlight": "ui/sizegrabber-highlight.png",
+  "interface\\chatframe\\ui-chatim-sizegrabber-down": "ui/sizegrabber-down.png",
+};
+const WHITE_FILES = new Set(["interface\\buttons\\white8x8", "interface\\tooltips\\ui-tooltip-background", "interface\\chatframe\\chatframebackground"]);
+function textureFor(key) {
+  let t = textures.get(key);
+  if (t) return t;
+  t = { tex: null, uvr: [0, 0, 1, 1], ready: false };
+  textures.set(key, t);
+  const engine = lua;
+  const done = (uvr) => (e) => { t.tex = e.tex; t.ready = true; if (uvr) t.uvr = uvr; if (engine === lua) engine.call("SANDBOX_TEXLOADED", key); };
+  const norm = key.replace(/\.(blp|tga|png|jpg)$/i, "");
+  if (WHITE_FILES.has(norm)) { t.tex = WHITE; t.ready = true; queueMicrotask(() => { if (engine === lua) engine.call("SANDBOX_TEXLOADED", key); }); }
+  else if (UI_FILES[norm]) loadImage(UI_FILES[norm], { repeat: true }, done());
+  else if (key.startsWith("interface\\addons\\gnomishpositioningsystem\\overview\\")) loadImage("overview/" + key.split("\\").pop(), { mip: true }, done());
+  else if (key.startsWith("fdid:")) {
+    const info = fdidInfo.get(Number(key.slice(5)));
+    const name = info && `${info.map}_${info.x}_${info.y}`;
+    if (info && HIRES.has(name)) loadImage("minimap/" + name + ".jpg", { mip: true }, done());
+    else if (info && info.atlas) {
+      // no copy of this minimap image in the sandbox: show its part of the overview image instead
+      const a = info.atlas;
+      loadImage("overview/" + a.file + ".jpg", { mip: true }, done([(info.x - a.x0) * 64 / a.w, (info.y - a.y0) * 64 / a.h, 64 / a.w, 64 / a.h]));
+    } else t.tex = MISSING;
+  } else { t.tex = MISSING; sys("[sandbox] no image for texture " + key); }
+  return t;
+}
+
+// Text: each distinct string is drawn once into its own small texture
+const textCache = new Map();
+const measureCtx = document.createElement("canvas").getContext("2d");
+const GAME_FONT = (px) => `${px}px Marcellus, Georgia, serif`;
+function measure(text, size) { measureCtx.font = GAME_FONT(size); return measureCtx.measureText(text).width; }
+function parseColored(text, base) {
+  const out = []; const re = /\|c([0-9a-fA-F]{8})|\|r/g; let last = 0, m, color = base;
+  while ((m = re.exec(text))) { if (m.index > last) out.push([text.slice(last, m.index), color]); color = m[1] ? "#" + m[1].slice(2) : base; last = re.lastIndex; }
+  if (last < text.length) out.push([text.slice(last), color]);
+  return out;
+}
+function textTexture(text, size, rgba, w, h, justify, scale) {
+  const key = text + "\u0001" + size + "\u0001" + rgba.join(",") + "\u0001" + Math.round(w) + "x" + Math.round(h) + "\u0001" + justify + "\u0001" + scale;
+  let e = textCache.get(key);
+  if (e) { e.used = frameNo; return e; }
+  const cw = Math.max(1, Math.ceil(w * scale) + 2), ch = Math.max(1, Math.ceil(h * scale) + 2);
+  const c = document.createElement("canvas"); c.width = cw; c.height = ch;
+  const x = c.getContext("2d");
+  x.font = GAME_FONT(size * scale); x.textBaseline = "middle";
+  const base = `rgba(${rgba[0]},${rgba[1]},${rgba[2]},${rgba[3] / 255})`;
+  const parts = parseColored(text, base);
+  const total = parts.reduce((s, p) => s + x.measureText(p[0]).width, 0);
+  let px = justify === 0 ? 1 : justify === 2 ? cw - 1 - total : (cw - total) / 2;
+  const py = ch / 2 + 0.5;
+  for (const [s, col] of parts) {
+    x.fillStyle = `rgba(0,0,0,${rgba[3] / 255})`; x.fillText(s, px + scale, py + scale);
+    x.fillStyle = col; x.fillText(s, px, py);
+    px += x.measureText(s).width;
+  }
+  e = { tex: makeGLTexture(c), used: frameNo, cw, ch };
+  textCache.set(key, e);
+  if (textCache.size > 600) for (const [k, v] of textCache) { if (v.used < frameNo - 120) { gl.deleteTexture(v.tex); textCache.delete(k); } }
+  return e;
+}
+
+// Draw list state (the engine sends only what changed)
+const dict = new Map();
+const statics = new Map(); // object id -> { key, uv: Float32Array(8), cols: Uint8Array(16) }
+let cmds = [];              // parsed draw records for the current frame
+let clips = new Map();
+let frameNo = 0, needDraw = true;
+function ingest(s) {
+  const cut = s.indexOf("\n\u0001\n");
+  const head = s.slice(0, cut), body = s.slice(cut + 3);
+  if (head) for (const line of head.split("\n")) { const tab = line.indexOf("\t"); if (tab > 0) dict.set(Number(line.slice(0, tab)), line.slice(tab + 1).replace(/\\n/g, "\n")); }
+  const nums = body ? body.split(",") : [];
+  const list = []; clips = new Map();
+  let i = 0;
+  const N = (k) => +nums[k];
+  while (i < nums.length) {
+    const k = +nums[i];
+    if (k === 0) { clips.set(N(i + 1), [N(i + 2) / 4, N(i + 3) / 4, N(i + 4) / 4, N(i + 5) / 4]); i += 6; }
+    else if (k === 3) {
+      const id = N(i + 1), key = dict.get(N(i + 2));
+      const uv = new Float32Array(8); for (let j = 0; j < 8; j++) uv[j] = N(i + 3 + j) / 65535;
+      const mode = N(i + 11), cols = new Uint8Array(16);
+      if (mode === 0) { for (let v = 0; v < 4; v++) for (let j = 0; j < 4; j++) cols[v * 4 + j] = N(i + 12 + j); i += 16; }
+      else { for (let j = 0; j < 16; j++) cols[j] = N(i + 12 + j); i += 28; }
+      statics.set(id, { key, uv, cols });
+    } else if (k === 4) {
+      list.push({ t: 4, id: N(i + 1), clip: N(i + 2), p: [N(i + 3) / 4, N(i + 4) / 4, N(i + 5) / 4, N(i + 6) / 4, N(i + 7) / 4, N(i + 8) / 4, N(i + 9) / 4, N(i + 10) / 4] });
+      i += 11;
+    } else if (k === 1) {
+      const key = dict.get(N(i + 1)), clip = N(i + 2);
+      const p = []; for (let j = 0; j < 8; j++) p.push(N(i + 3 + j) / 4);
+      const uv = new Float32Array(8); for (let j = 0; j < 8; j++) uv[j] = N(i + 11 + j) / 65535;
+      const mode = N(i + 19), cols = new Uint8Array(16);
+      if (mode === 0) { for (let v = 0; v < 4; v++) for (let j = 0; j < 4; j++) cols[v * 4 + j] = N(i + 20 + j); i += 24; }
+      else { for (let j = 0; j < 16; j++) cols[j] = N(i + 20 + j); i += 36; }
+      list.push({ t: 1, key, clip, p, uv, cols });
+    } else if (k === 2) {
+      list.push({ t: 2, text: dict.get(N(i + 1)), clip: N(i + 2), size: N(i + 3), r: [N(i + 4) / 4, N(i + 5) / 4, N(i + 6) / 4, N(i + 7) / 4], rgba: [N(i + 8), N(i + 9), N(i + 10), N(i + 11)], j: N(i + 12) });
+      i += 13;
+    } else throw new Error("bad draw record " + k + " at " + i);
+  }
+  cmds = list;
+  needDraw = true;
+}
+
+let uiScale = 1, dpr = 1, uiW = 1024, uiH = 768;
+function resize() {
+  const r = screen.getBoundingClientRect();
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  uiScale = Math.max(0.6, Math.min(1, r.width / 560, r.height / 520));
+  uiW = r.width / uiScale; uiH = r.height / uiScale;
+  const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; needDraw = true; }
+}
+
+function draw() {
+  frameNo++;
+  const S = uiScale * dpr;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.uniform2f(loc.s, canvas.width, canvas.height);
+  let q = 0, curTex = null, curUvr = null, curClip = -1;
+  const flush = () => {
+    if (!q) return;
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Uint8Array(vdata, 0, q * 80));
+    gl.drawElements(gl.TRIANGLES, q * 6, gl.UNSIGNED_SHORT, 0);
+    q = 0;
+  };
+  const setState = (tex, uvr, clip) => {
+    if (tex === curTex && clip === curClip && (uvr === curUvr || (uvr[0] === curUvr[0] && uvr[1] === curUvr[1] && uvr[2] === curUvr[2] && uvr[3] === curUvr[3]))) return;
+    flush();
+    if (tex !== curTex) { gl.bindTexture(gl.TEXTURE_2D, tex); curTex = tex; }
+    if (uvr !== curUvr) { gl.uniform4f(loc.uvr, uvr[0], uvr[1], uvr[2], uvr[3]); curUvr = uvr; }
+    if (clip !== curClip) {
+      curClip = clip;
+      const c = clips.get(clip);
+      if (c) { gl.enable(gl.SCISSOR_TEST); const x0 = Math.floor(c[0] * S), y0 = Math.floor(c[1] * S); gl.scissor(x0, y0, Math.ceil(c[2] * S) - x0, Math.ceil(c[3] * S) - y0); }
+      else gl.disable(gl.SCISSOR_TEST);
+    }
+  };
+  const quad = (p, uv, cols) => {
+    if (q >= MAXQ) flush();
+    let o = q * 20; // floats per quad: 4 vertices x 5 (x, y, u, v, packed colour)
+    const order = [0, 1, 2, 3]; // UL, LL, UR, LR
+    for (let v = 0; v < 4; v++) {
+      vf[o] = p[v * 2] * S; vf[o + 1] = p[v * 2 + 1] * S; vf[o + 2] = uv[v * 2]; vf[o + 3] = uv[v * 2 + 1];
+      const b = (o + 4) * 4; vu[b] = cols[v * 4]; vu[b + 1] = cols[v * 4 + 1]; vu[b + 2] = cols[v * 4 + 2]; vu[b + 3] = cols[v * 4 + 3];
+      o += 5;
+    }
+    q++;
+  };
+  const FULL = [0, 0, 1, 1];
+  for (const c of cmds) {
+    if (c.t === 4) {
+      const st = statics.get(c.id); if (!st) continue;
+      const t = textureFor(st.key); if (!t.tex) continue;
+      setState(t.tex, t.uvr, c.clip); quad(c.p, st.uv, st.cols);
+    } else if (c.t === 1) {
+      const t = textureFor(c.key); if (!t.tex) continue;
+      setState(t.tex, t.uvr, c.clip); quad(c.p, c.uv, c.cols);
+    } else if (c.t === 2) {
+      const [l, b, w, h] = c.r;
+      if (w <= 0 || h <= 0) continue;
+      const e = textTexture(c.text, c.size, c.rgba, w, h, c.j, S);
+      setState(e.tex, FULL, c.clip);
+      const x0 = l - 1 / S, x1 = l + e.cw / S - 1 / S, y1 = b + h + 1 / S, y0 = y1 - e.ch / S;
+      quad([x0, y1, x0, y0, x1, y1, x1, y0], [0, 0, 0, 1, 1, 0, 1, 1], WHITE_COLS);
+    }
+  }
+  flush();
+  needDraw = false;
+}
+const WHITE_COLS = new Uint8Array(16).fill(255);
+
+// ---------------------------------------------------------------------------------------------
+// Input: mouse, touch (one finger = left button; two fingers = pinch zoom + twist/slide = right drag)
+// ---------------------------------------------------------------------------------------------
+const toUI = (cx, cy) => { const r = canvas.getBoundingClientRect(); return [(cx - r.left) / uiScale, (r.bottom - cy) / uiScale]; };
+const mouse = (kind, x, y, button, delta) => { if (lua) { try { lua.call("SANDBOX_MOUSE", kind, x, y, button || "", delta || 0); } catch (e) { sys("engine: " + e.message); } } };
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+const touches = new Map();
+let gesture = null; // two-finger state
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  const [x, y] = toUI(e.clientX, e.clientY);
+  if (e.pointerType === "touch") {
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 1) { mouse("move", x, y); mouse("down", x, y, $("touchRight").checked ? "RightButton" : "LeftButton"); }
+    else if (touches.size === 2) {
+      const btn = $("touchRight").checked ? "RightButton" : "LeftButton";
+      const first = [...touches.values()][0], [fx, fy] = toUI(first.x, first.y);
+      mouse("up", fx, fy, btn);
+      const g = twoFinger(); gesture = { ...g, ax: g.mx, ay: g.my };
+      const [mx, my] = toUI(g.mx, g.my);
+      mouse("move", mx, my); mouse("down", mx, my, "RightButton");
+    }
+    e.preventDefault();
+    return;
+  }
+  mouse("move", x, y);
+  mouse("down", x, y, e.button === 2 ? "RightButton" : e.button === 1 ? "MiddleButton" : "LeftButton");
+});
+function twoFinger() {
+  const [a, b] = [...touches.values()];
+  return { mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, d: Math.hypot(b.x - a.x, b.y - a.y), ang: Math.atan2(b.y - a.y, b.x - a.x) };
+}
+canvas.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "touch") {
+    if (!touches.has(e.pointerId)) return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 1) { const [x, y] = toUI(e.clientX, e.clientY); mouse("move", x, y); }
+    else if (touches.size === 2 && gesture) {
+      const g = twoFinger();
+      // twist turns, sliding moves the virtual right-drag cursor; pinch sends wheel steps
+      let dAng = g.ang - gesture.ang; if (dAng > Math.PI) dAng -= 2 * Math.PI; if (dAng < -Math.PI) dAng += 2 * Math.PI;
+      gesture.ax += (g.mx - gesture.mx) + dAng * 180 / Math.PI * 2.5; // twist clockwise: the world turns clockwise
+      gesture.ay += (g.my - gesture.my);
+      const [vx, vy] = toUI(gesture.ax, gesture.ay); mouse("move", vx, vy);
+      const ratio = g.d / gesture.d;
+      if (ratio > 1.22 || ratio < 0.82) { const [mx, my] = toUI(g.mx, g.my); mouse("wheel", mx, my, null, ratio > 1 ? 1 : -1); gesture.d = g.d; }
+      gesture.mx = g.mx; gesture.my = g.my; gesture.ang = g.ang;
+    }
+    e.preventDefault();
+    return;
+  }
+  const [x, y] = toUI(e.clientX, e.clientY);
+  mouse("move", x, y);
+});
+const endPointer = (e) => {
+  if (e.pointerType === "touch") {
+    if (!touches.has(e.pointerId)) return;
+    const wasTwo = touches.size === 2;
+    touches.delete(e.pointerId);
+    if (wasTwo && gesture) { const [vx, vy] = toUI(gesture.ax, gesture.ay); mouse("up", vx, vy, "RightButton"); gesture = null; }
+    else if (touches.size === 0 && !wasTwo) { const [x, y] = toUI(e.clientX, e.clientY); mouse("up", x, y, $("touchRight").checked ? "RightButton" : "LeftButton"); }
+    if (touches.size === 0) mouse("leave", 0, 0);
+    return;
+  }
+  const [x, y] = toUI(e.clientX, e.clientY);
+  mouse("up", x, y, e.button === 2 ? "RightButton" : e.button === 1 ? "MiddleButton" : "LeftButton");
+};
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("pointerleave", (e) => { if (e.pointerType !== "touch" && e.buttons === 0) mouse("leave", 0, 0); });
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); const [x, y] = toUI(e.clientX, e.clientY); mouse("move", x, y); mouse("wheel", x, y, null, e.deltaY < 0 ? 1 : -1); }, { passive: false });
+
+const KEYMAP = { KeyW: "fwd", ArrowUp: "fwd", KeyS: "back", ArrowDown: "back", KeyA: "turnL", ArrowLeft: "turnL", KeyD: "turnR", ArrowRight: "turnR", KeyQ: "left", KeyE: "right" };
+window.addEventListener("keydown", (e) => {
+  if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA")) return;
+  if (KEYMAP[e.code]) { keys.add(KEYMAP[e.code]); e.preventDefault(); }
+  else if (e.code === "KeyM") { runLua("GPS_Toggle()"); }
+  else if (e.code === "Escape") { lua && lua.call("SANDBOX_KEY", "ESCAPE"); }
+  else if (e.code === "Enter" || e.code === "Slash") { $("cmdline").focus(); if (e.code === "Slash") { $("cmdline").value = "/"; e.preventDefault(); } }
+});
+window.addEventListener("keyup", (e) => { if (KEYMAP[e.code]) keys.delete(KEYMAP[e.code]); });
+window.addEventListener("blur", () => keys.clear());
+document.querySelectorAll(".pad button").forEach((b) => {
+  const k = b.dataset.k;
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); keys.add(k); });
+  const up = () => keys.delete(k);
+  b.addEventListener("pointerup", up); b.addEventListener("pointercancel", up); b.addEventListener("lostpointercapture", up);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Commands, saving, boot
+// ---------------------------------------------------------------------------------------------
+function runLua(code) { if (!lua) return; try { lua.run(code, "sandbox"); } catch (e) { chatLine("|cffff4040Lua error:|r " + e.message); } }
+function slash(line) { if (!lua) return; chatLine("|cff9fb3c8> " + line + "|r"); try { lua.call("SANDBOX_SLASH", line); } catch (e) { chatLine("|cffff4040Lua error:|r " + e.message); } }
+$("cmd").addEventListener("submit", (e) => { e.preventDefault(); const v = $("cmdline").value.trim(); if (v) slash(v); $("cmdline").value = ""; $("cmdline").blur(); });
+document.querySelectorAll(".quick button").forEach((b) => b.addEventListener("click", () => slash(b.dataset.cmd)));
+$("btn-map").addEventListener("click", () => runLua("GPS_Toggle()"));
+$("btn-3d").addEventListener("click", () => runLua("if GPS3D_API then GPS3D_API.Show(GPS_MapFrame); GPS_MapFrame:Hide() end"));
+$("btn-go").addEventListener("click", () => { const p = PLACES[$("teleport").value]; Object.assign(player, { X: p.X, Y: p.Y, map: p.map, facing: p.facing, zone: p.zone, sub: p.sub }); });
+$("btn-reload").addEventListener("click", () => { save(); boot(); });
+$("btn-reset").addEventListener("click", () => { try { localStorage.removeItem(STORE_KEY); } catch (e) {} savedText = ""; boot(true); });
+
+let savedText = "";
+try { savedText = localStorage.getItem(STORE_KEY) || ""; } catch (e) {}
+function save() {
+  if (!lua) return;
+  try { savedText = lua.call("SANDBOX_SAVE", ADDONS.map((a) => a.saved).join(",")) || ""; localStorage.setItem(STORE_KEY, savedText); } catch (e) {}
+}
+window.addEventListener("pagehide", save);
+setInterval(save, 5000);
+
+let running = false, lastT = 0, stats = { lua: 0, draw: 0, fps: 0 }, fpsAcc = 0, fpsN = 0;
+async function boot(reset) {
+  running = false;
+  if (lua) { try { lua.close(); } catch (e) {} lua = null; }
+  textures.clear(); statics.clear(); dict.clear(); cmds = [];
+  const t0 = performance.now();
+  lua = await makeLua();
+  lua.setFn("SANDBOX_MEASURE", (text, size) => measure(String(text), size));
+  lua.run(sources["engine.lua"], "engine.lua");
+  for (const a of ADDONS) {
+    for (const f of a.files) {
+      const ok = lua.call("SANDBOX_LOAD", a.name, f, sources[`addons/${a.name}/${f}`]);
+      if (!ok) sys(`${a.name}/${f} failed to load (see the error above)`);
+    }
+  }
+  // the sandbox needs the addon's tile list to find minimap images by file ID
+  fdidInfo = new Map();
+  lua.run(`
+    local ns = SANDBOX.namespaces.GnomishPositioningSystem
+    local parts = {}
+    for id, m in pairs(ns.Maps or {}) do
+      for key, fdid in pairs(m.tiles) do
+        local x, y = key % 64, key // 64
+        local atlas
+        for _, a in ipairs(m.atlases) do if x >= a.x0 and x < a.x0 + a.cols and y >= a.y0 and y < a.y0 + a.rows then atlas = a break end end
+        parts[#parts + 1] = table.concat({ fdid, id, x, y, atlas and atlas.file or "", atlas and atlas.x0 or 0, atlas and atlas.y0 or 0, atlas and atlas.w or 0, atlas and atlas.h or 0 }, ",")
+      end
+    end
+    SANDBOX_TILELIST = table.concat(parts, ";")`, "tiles");
+  lua.run(`function SANDBOX_GETTILES() return SANDBOX_TILELIST end`, "tiles2");
+  for (const rec of String(lua.call("SANDBOX_GETTILES")).split(";")) {
+    const f = rec.split(","); if (f.length < 9) continue;
+    fdidInfo.set(+f[0], { map: +f[1], x: +f[2], y: +f[3], atlas: f[4] ? { file: f[4], x0: +f[5], y0: +f[6], w: +f[7], h: +f[8] } : null });
+  }
+  if (!reset && savedText) lua.call("SANDBOX_RESTORE", savedText);
+  if (!savedText || reset) {
+    // first run: size the map window to the screen (as you would by dragging its corner)
+    resize();
+    const w = Math.round(Math.min(900, uiW - 24)), h = Math.round(Math.min(650, uiH - 24));
+    lua.call("SANDBOX_RESTORE", `GnomishPositioningSystemDB={width=${w},height=${h}}`);
+  }
+  sendPlayer();
+  for (const a of ADDONS) lua.call("SANDBOX_LOADED", a.name);
+  lua.call("SANDBOX_FIRE", "PLAYER_LOGIN");
+  lua.call("SANDBOX_FIRE", "PLAYER_ENTERING_WORLD", true, false);
+  sys(`Lua ready: ${lua.kind}, both addons loaded in ${Math.round(performance.now() - t0)} ms.`);
+  runLua(`if not GPS_MapFrame:IsShown() then GPS_Toggle() end`);
+  $("boot").hidden = true;
+  running = true;
+  lastT = performance.now();
+}
+function sendPlayer() {
+  const z = zoneOf(player);
+  const none = player.map === null;
+  lua.call("SANDBOX_PLAYER", none ? 0 : player.X, none ? 0 : player.Y, 0, none ? -1 : player.map, player.facing, z.zone, z.sub, z.ui ?? -1, z.mx ?? -1, z.my ?? -1);
+}
+function updateReadout() {
+  const z = zoneOf(player);
+  const gx = 32 - player.Y / TILE, gy = 32 - player.X / TILE;
+  $("you").innerHTML = player.map === null
+    ? `<span class="k">where</span> inside a dungeon<br><span class="k">UnitPosition</span> nil`
+    : `<span class="k">zone</span> ${z.zone}${z.sub ? " · " + z.sub : ""}<br>` +
+      `<span class="k">world</span> ${player.X.toFixed(1)}, ${player.Y.toFixed(1)}  <span class="k">map</span> ${player.map}<br>` +
+      `<span class="k">tile</span> ${Math.floor(gx)}_${Math.floor(gy)}  <span class="k">facing</span> ${(player.facing * 180 / Math.PI).toFixed(0)}°`;
+}
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  resize();
+  if (!running || !lua) return;
+  const dt = Math.min(0.1, Math.max(0, (now - lastT) / 1000)); lastT = now;
+  stepPlayer(dt);
+  try {
+    sendPlayer();
+    const t0 = performance.now();
+    const s = lua.call("SANDBOX_TICK", dt, uiW, uiH);
+    const t1 = performance.now();
+    if (s) ingest(String(s));
+    const chat = lua.call("SANDBOX_CHAT");
+    if (chat) String(chat).split("\n").forEach((l) => chatLine(l));
+    stats.lua = stats.lua * 0.9 + (t1 - t0) * 0.1;
+  } catch (e) { chatLine("|cffff4040Sandbox error:|r " + e.message); running = false; return; }
+  if (needDraw) { const t2 = performance.now(); draw(); stats.draw = stats.draw * 0.9 + (performance.now() - t2) * 0.1; }
+  fpsAcc += dt; fpsN++;
+  if (fpsAcc > 0.5) { stats.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0; $("status").innerHTML = `<b>${stats.fps.toFixed(0)}</b> fps · Lua <b>${stats.lua.toFixed(1)}</b> ms · draw <b>${stats.draw.toFixed(1)}</b> ms<span class="kind"> · ${lua.kind}</span>`; updateReadout(); }
+}
+
+window.__sandbox = { slash, runLua, player, stats: () => stats, lua: () => lua, keys };
+(async () => {
+  try {
+    await Promise.all([loadSources(), document.fonts.load("16px Marcellus").catch(() => {})]);
+    await boot();
+    requestAnimationFrame(loop);
+  } catch (e) {
+    $("boot").innerHTML = `<div><strong>The sandbox could not start</strong>${String(e.message || e).replace(/</g, "&lt;")}</div>`;
+    console.error(e);
+  }
+})();
+})();
+</script>

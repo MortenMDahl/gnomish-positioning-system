@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="GPS_TOGGLE" category="BINDING_HEADER_GPS">
+		GPS_Toggle()
+	</Binding>
+</Bindings>

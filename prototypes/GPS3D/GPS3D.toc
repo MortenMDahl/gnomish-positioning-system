@@ -1,0 +1,45 @@
+## Interface: 16001
+## Title: GPS 3D
+## Notes: The 3D view for Gnomish Positioning System: the whole world in perspective, buildings included, with you on it. /gps3d
+## Version: 0.5.0
+## Dependencies: GnomishPositioningSystem
+## SavedVariables: GPS3D_DB
+
+Data\World_0.lua
+Data\World_1.lua
+Data\World_30.lua
+Data\World_33.lua
+Data\World_36.lua
+Data\World_47.lua
+Data\World_169.lua
+Data\World_209.lua
+Data\World_289.lua
+Data\World_309.lua
+Data\World_329.lua
+Data\World_469.lua
+Data\World_489.lua
+Data\World_509.lua
+Data\World_529.lua
+Data\World_531.lua
+Data\Detail_0_1.lua
+Data\Detail_0_2.lua
+Data\Detail_0_3.lua
+Data\Detail_0_4.lua
+Data\Detail_1_1.lua
+Data\Detail_1_2.lua
+Data\Detail_1_3.lua
+Data\Detail_1_4.lua
+Data\Detail_30.lua
+Data\Detail_33.lua
+Data\Detail_36.lua
+Data\Detail_47.lua
+Data\Detail_209.lua
+Data\Detail_289.lua
+Data\Detail_309.lua
+Data\Detail_329.lua
+Data\Detail_469.lua
+Data\Detail_489.lua
+Data\Detail_509.lua
+Data\Detail_529.lua
+Data\Detail_531.lua
+GPS3D.lua

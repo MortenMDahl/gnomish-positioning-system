@@ -1,0 +1,22 @@
+{
+  "_about": "Settings for the GPS terrain/building export (see INTEGRATION_PLAN.md, 'Chosen approach for buildings'). Distances and errors are in yards.",
+  "heightSampleSpacing": 1.0,
+  "shapeError": {
+    "_about": "Max height error when simplifying each tile's height map into triangles. 1 yard is the agreed starting point (2026-10-13): 0.5 looks the same close up, 2 gets faceted walls close up.",
+    "default": 1.0,
+    "lodLevels": [
+      { "name": "near", "maxCameraDistance": 300, "shapeError": 1.0 },
+      { "name": "mid", "maxCameraDistance": 900, "shapeError": 2.0 },
+      { "name": "far", "maxCameraDistance": null, "shapeError": 8.0 }
+    ]
+  },
+  "bakeIntoHeights": {
+    "wmo": true,
+    "m2": false,
+    "_about": "Trees and other M2 doodads are not baked: canopies turn forests into lumpy hills. They stay painted on the minimap or are placed as ModelScene models near the camera."
+  },
+  "modelOverrides": {
+    "_about": "Per-model fine-tuning, keyed by WMO FileDataID. shapeError overrides the default for triangles belonging to that model; exclude: true leaves it out of the height map.",
+    "7556033": { "_name": "Northshire Abbey", "shapeError": 1.0 }
+  }
+}

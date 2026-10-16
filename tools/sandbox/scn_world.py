@@ -1,0 +1,17 @@
+async def run():
+    await page.click('#btn-3d'); await page.wait_for_timeout(3000)
+    await shot('w_00_northshire.png')
+    for place in ['goldshire', 'westfall', 'ironforge', 'bootybay', 'orgrimmar', 'crossroads', 'bloodhoof', 'teldrassil', 'wsg', 'av', 'zg']:
+        await page.select_option('#teleport', place); await page.click('#btn-go')
+        await page.wait_for_timeout(2500)
+        await shot(f'w_{place}.png')
+        print(place, await status())
+    # zoom far out over Kalimdor (Free mode + wheel)
+    await page.select_option('#teleport', 'crossroads'); await page.click('#btn-go'); await page.wait_for_timeout(1500)
+    x0, y0, w, h = await canvas_box()
+    await page.mouse.move(x0 + w / 2, y0 + h / 2)
+    for _ in range(24): await page.mouse.wheel(0, 120); await page.wait_for_timeout(40)
+    await page.wait_for_timeout(2500)
+    await shot('w_kalimdor_far.png')
+    print('far:', await status())
+    await ev('__sandbox.slash("/gps3d test")'); await page.wait_for_timeout(5000)
