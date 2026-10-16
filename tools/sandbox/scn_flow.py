@@ -25,8 +25,8 @@ async def run():
         await page.mouse.move(px, py); await page.mouse.down(button=button); await page.mouse.up(button=button)
     await click_ui(mx, my); await page.wait_for_timeout(600)
     await shot('04_2d_me.png')
-    # switch to 3D with the 3D text button
-    p3 = await ev('''(() => { const L = __sandbox.lua(); L.run("local u = SANDBOX.namespaces.GnomishPositioningSystem.ui; local l,b,r,t = SANDBOX.rect(u.mode3D); SANDBOX_TMP = string.format('%f,%f', (l+r)/2, (b+t)/2)"); return L.call("SANDBOX_GETTMP"); })()''')
+    # switch to 3D with the 2D/3D ring
+    p3 = await ev('''(() => { const L = __sandbox.lua(); L.run("local u = SANDBOX.namespaces.GnomishPositioningSystem.ui; local l,b,r,t = SANDBOX.rect(u.modeSwitch); SANDBOX_TMP = string.format('%f,%f', (l+r)/2, (b+t)/2)"); return L.call("SANDBOX_GETTMP"); })()''')
     ux, uy = [float(v) for v in p3.split(',')]
     await click_ui(ux, uy); await page.wait_for_timeout(2500)
     await shot('05_3d_follow.png')

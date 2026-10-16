@@ -37,7 +37,7 @@ async def main():
     H = int(sys.argv[3]) if len(sys.argv) > 3 else 900
     async with async_playwright() as p:
         b = await p.chromium.launch(args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'])
-        ctx = await b.new_context(viewport={'width': W, 'height': H}, device_scale_factor=1, has_touch=(W < 700))
+        ctx = await b.new_context(viewport={'width': W, 'height': H}, device_scale_factor=float(os.environ.get('DSF', '1')), has_touch=(W < 700))
         page = await ctx.new_page()
         logs = []
         page.on('console', lambda m: logs.append(f'{m.type}: {m.text}'))

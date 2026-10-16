@@ -8,7 +8,7 @@ for i = -700, 700, 25 do for j = -700, 700, 25 do
   local d = math.sqrt(i * i + j * j)
   if d > 450 and d < 650 then local h = ns.GroundHeight(px + i, py + j) if not best or h < best[3] then best = { px + i, py + j, h } end end
 end end
-local b = ns.modeButtons.free; b._scripts.OnClick(b)
+ns.SetCamMode('free')
 if os.getenv and false then end
 ns.SetTopDown(TOPDOWN, true)
 cam.map = 0; if not TOPDOWN then cam.pitch = 45 end; cam.dist = DIST

@@ -369,6 +369,21 @@ function Texture:SetVertTile() end
 function Texture:SetSnapToPixelGrid() end
 function Texture:SetTexelSnappingBias() end
 function Texture:IsObjectLoaded() return S.isLoaded(self._file) end
+-- Atlases: drawn from "atlas:<name>" (the page maps the ones GPS uses to images in ui/).
+local ATLAS_SIZE = {
+	["ui-hud-minimap-zoom-in"] = { 17, 17 }, ["ui-hud-minimap-zoom-out"] = { 17, 17 },
+	["redbutton-exit"] = { 24, 24 },
+}
+function Texture:SetAtlas(name, useAtlasSize)
+	if type(name) ~= "string" then return false end
+	self._atlas = name
+	self:SetTexture("atlas:" .. name:lower())
+	self:SetTexCoord(0, 1, 0, 1)
+	local size = ATLAS_SIZE[name:lower()]
+	if useAtlasSize and size then self:SetSize(size[1], size[2]) end
+	return true
+end
+function Texture:GetAtlas() return self._atlas end
 function Texture:SetParent(p)
 	local old = self._parent
 	if old == p then return end
@@ -390,6 +405,8 @@ local FONTS = {
 	GameFontNormalSmall = { size = 10, color = { 1, 0.82, 0, 1 } },
 	GameFontNormalLarge = { size = 16, color = { 1, 0.82, 0, 1 } },
 	GameFontNormalHuge = { size = 20, color = { 1, 0.82, 0, 1 } },
+	GameFontNormalTiny = { size = 9, color = { 1, 0.82, 0, 1 } },
+	GameFontNormalTiny2 = { size = 8, color = { 1, 0.82, 0, 1 } },
 	GameFontHighlight = { size = 12, color = { 1, 1, 1, 1 } },
 	GameFontHighlightSmall = { size = 10, color = { 1, 1, 1, 1 } },
 	GameFontHighlightLarge = { size = 16, color = { 1, 1, 1, 1 } },
@@ -424,9 +441,17 @@ function FontString:SetFormattedText(fmt, ...) self:SetText(string.format(fmt, .
 function FontString:GetText() return self._text end
 function FontString:SetTextColor(r, g, b, a) self._color = { r, g, b, a or 1 }; touch() end
 function FontString:GetTextColor() local c = self._color; return c[1], c[2], c[3], c[4] end
-function FontString:SetFontObject(f) if type(f) == "string" then f = FONTS[f] end; self._font = f or DEFAULT_FONT; relayout(self) end
-function FontString:GetFontObject() return self._font end
-function FontString:SetFont(_, size) self._font = { size = size or 12, color = self._font.color, name = "custom" }; relayout(self) end
+function FontString:SetFontObject(f) if type(f) == "string" then f = FONTS[f] end; self._font = f or DEFAULT_FONT; self._baseFont = nil; relayout(self) end
+function FontString:GetFontObject() return self._baseFont or self._font end
+-- Text scale: drawn and measured at the font's size times the scale.
+function FontString:SetTextScale(scale)
+	local base = self._baseFont or self._font
+	if scale == 1 then self._font, self._baseFont = base, nil
+	else self._baseFont = base; self._font = { size = base.size * scale, color = base.color, name = base.name } end
+	relayout(self)
+end
+function FontString:GetTextScale() local b = self._baseFont; return b and self._font.size / b.size or 1 end
+function FontString:SetFont(_, size) self._font = { size = size or 12, color = self._font.color, name = "custom" }; self._baseFont = nil; relayout(self) end
 function FontString:SetJustifyH(j) self._justify = ({ LEFT = 0, CENTER = 1, RIGHT = 2 })[j:upper()] or 1; touch() end
 function FontString:SetJustifyV() end
 function FontString:SetWordWrap(w) self._wrap = w; touch() end
@@ -593,6 +618,18 @@ end
 function Button:SetPushedTexture(file)
 	if not self._pushed then self._pushed = newTexture(self, "ARTWORK"); self._pushed:SetAllPoints(self); self._pushed._isPushed = true end
 	self._pushed:SetTexture(file)
+end
+function Button:SetNormalAtlas(name)
+	if not self._normal then self._normal = newTexture(self, "ARTWORK"); self._normal:SetAllPoints(self) end
+	self._normal:SetAtlas(name)
+end
+function Button:SetHighlightAtlas(name)
+	if not self._highlight then self._highlight = newTexture(self, "HIGHLIGHT"); self._highlight:SetAllPoints(self) end
+	self._highlight:SetAtlas(name)
+end
+function Button:SetPushedAtlas(name)
+	if not self._pushed then self._pushed = newTexture(self, "ARTWORK"); self._pushed:SetAllPoints(self); self._pushed._isPushed = true end
+	self._pushed:SetAtlas(name)
 end
 function Button:GetNormalTexture() return self._normal end
 function Button:GetHighlightTexture() return self._highlight end
@@ -866,7 +903,8 @@ local function sid(s)
 		dictN = dictN + 1
 		id = dictN
 		dict[s] = id
-		newDict[#newDict + 1] = id .. "\t" .. s:gsub("\n", "\\n")
+		-- backslashes doubled first, so a path such as "Media\Needle" is not read back as a line break
+		newDict[#newDict + 1] = id .. "\t" .. (s:gsub("\\", "\\\\"):gsub("\n", "\\n"))
 	end
 	return id
 end

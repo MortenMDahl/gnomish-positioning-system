@@ -147,7 +147,7 @@ details.panel .fake { color: var(--warn); }
             <label class="toggle"><input type="checkbox" id="touchRight"> Touch drags with the right button</label>
           </div>
         </div>
-        <p class="hint"><kbd>W</kbd><kbd>S</kbd> walk, <kbd>A</kbd><kbd>D</kbd> turn, <kbd>Q</kbd><kbd>E</kbd> strafe, <kbd>Esc</kbd> closes the map. On the map: drag, right-drag (tilt from 30&deg; to straight down), wheel; the 90&deg; button under the compass locks the view straight down. On a phone: drag with one finger; with two fingers pinch to zoom and twist or slide to turn and tilt.</p>
+        <p class="hint"><kbd>W</kbd><kbd>S</kbd> walk, <kbd>A</kbd><kbd>D</kbd> turn, <kbd>Q</kbd><kbd>E</kbd> strafe, <kbd>Esc</kbd> closes the map. On the map: drag, right-drag (tilt from 45&deg; to straight down), wheel; the ring under the compass (a little grid of ground, turned and tilted with the view) locks the view straight down or frees the tilt; the camera-mode ring under the 3D ring steps Follow, Behind and Free. On a phone: drag with one finger; with two fingers pinch to zoom and twist or slide to turn and tilt.</p>
       </div>
       <div class="panel chat">
         <h2>Chat</h2>
@@ -401,6 +401,17 @@ const UI_FILES = {
   "interface\\chatframe\\ui-chatim-sizegrabber-up": "ui/sizegrabber-up.png",
   "interface\\chatframe\\ui-chatim-sizegrabber-highlight": "ui/sizegrabber-highlight.png",
   "interface\\chatframe\\ui-chatim-sizegrabber-down": "ui/sizegrabber-down.png",
+  // stand-ins drawn by make_standins.py (no copy of the game's art here) and GPS's own icons (scripts/make_media.py)
+  "interface\\minimap\\ui-minimap-background": "ui/minimap-background.png",
+  "interface\\minimap\\ui-minimap-zoombutton-highlight": "ui/zoombutton-highlight.png",
+  "atlas:redbutton-exit": "ui/atlas-redbutton-exit.png",
+  "atlas:redbutton-exit-pressed": "ui/atlas-redbutton-exit-pressed.png",
+  "atlas:redbutton-highlight": "ui/atlas-redbutton-highlight.png",
+  "interface\\addons\\gnomishpositioningsystem\\media\\needle": "ui/media-needle.png",
+  "interface\\addons\\gnomishpositioningsystem\\media\\camfollow": "ui/media-camfollow.png",
+  "interface\\addons\\gnomishpositioningsystem\\media\\cambehind": "ui/media-cambehind.png",
+  "interface\\addons\\gnomishpositioningsystem\\media\\camfree": "ui/media-camfree.png",
+  "interface\\addons\\gnomishpositioningsystem\\media\\cell": "ui/media-cell.png",
 };
 const WHITE_FILES = new Set(["interface\\buttons\\white8x8", "interface\\tooltips\\ui-tooltip-background", "interface\\chatframe\\chatframebackground"]);
 function textureFor(key) {
@@ -471,7 +482,7 @@ let frameNo = 0, needDraw = true;
 function ingest(s) {
   const cut = s.indexOf("\n\u0001\n");
   const head = s.slice(0, cut), body = s.slice(cut + 3);
-  if (head) for (const line of head.split("\n")) { const tab = line.indexOf("\t"); if (tab > 0) dict.set(Number(line.slice(0, tab)), line.slice(tab + 1).replace(/\\n/g, "\n")); }
+  if (head) for (const line of head.split("\n")) { const tab = line.indexOf("\t"); if (tab > 0) dict.set(Number(line.slice(0, tab)), line.slice(tab + 1).replace(/\\([\\n])/g, (_, c) => (c === "n" ? "\n" : "\\"))); }
   const nums = body ? body.split(",") : [];
   const list = []; clips = new Map();
   let i = 0;

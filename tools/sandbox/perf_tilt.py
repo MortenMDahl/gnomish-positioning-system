@@ -47,7 +47,7 @@ G.SlashCmdList.GPS3D('detail on'); G.SlashCmdList.GPS3D('buildings 4000')
 import os
 place(*((-9400, -1300) if not os.environ.get('FLAT') else (-10300, 1500)), 0, 0.0); tick(5); ns2.ReadPlayer()
 import os
-ns2.modeButtons.free._scripts.OnClick(ns2.modeButtons.free); ns2.SetTopDown(False, True)
+ns2.SetCamMode('free'); ns2.SetTopDown(False, True)
 import os
 X0, Y0, TH = (18300, -25627, 66) if not os.environ.get('FLAT') else (pl.x, pl.y, pl.h)
 for pitch, dist in ((30, 120), (45, 300)):

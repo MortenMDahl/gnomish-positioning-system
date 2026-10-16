@@ -25,7 +25,7 @@ G.SANDBOX_PLAYER(-9400, -1300, 0, 0, 0.0, 'Elwynn Forest', '', -1, -1, -1)
 G.SlashCmdList.GPS(''); tick(2)
 G.GPS3D_API.Show(G.GPS_MapFrame, None); G.GPS_MapFrame.Hide(G.GPS_MapFrame); tick(20)
 ns = G.SANDBOX.namespaces['GPS3D']
-ns.modeButtons.free._scripts.OnClick(ns.modeButtons.free); ns.SetTopDown(False, True); tick(2)
+ns.SetCamMode('free'); ns.SetTopDown(False, True); tick(2)
 L.execute(r'''
 function DIAG(NX, NY)
   local ns = SANDBOX.namespaces.GPS3D

@@ -8,7 +8,7 @@ async def run():
         lua = f'''
 local ns = SANDBOX.namespaces.GPS3D
 local cam = ns.cam
-local b = ns.modeButtons.free; b._scripts.OnClick(b)
+ns.SetCamMode('free')
 ns.SetTopDown(false, true)
 cam.map = 0
 local th = {'nil' if th is None else th}

@@ -5,7 +5,7 @@ L = lupa54.LuaRuntime()
 G = L.globals()
 G.SANDBOX_MEASURE = lambda text, size: len(text) * size * 0.55
 L.execute(open(f'{SITE}/engine.lua').read())
-toc = open('/mnt/user-data/outputs/GPS3D.toc').read()
+toc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'prototypes', 'GPS3D', 'GPS3D.toc')).read()
 gps3d_files = [l.strip().replace('\\', '/') for l in toc.splitlines() if l.strip() and not l.startswith('##')]
 t0 = time.time()
 for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua']), ('GPS3D', gps3d_files)]:
@@ -38,7 +38,7 @@ st, cam, pl = ns2.stats, ns2.cam, ns2.player
 check('opens following you in Northshire', ns2.CamMode() == 'follow' and cam.map == 0 and abs(cam.x - pl.x) < 1e-6, f'mode {ns2.CamMode()} map {cam.map}')
 check('opens looking straight down by default (nothing saved yet)', ns2.IsTopDown() and abs(cam.pitch - 89.9) < 1e-9 and G.GPS3D_DB.topDown == True, f'pitch {cam.pitch:.2f}')
 G.SlashCmdList.GPS3D('top'); tick(30)  # the checks below were written for the tilted view
-check('/gps3d top turns it off and back to the tilted view', not ns2.IsTopDown() and abs(cam.pitch - 32) < 1e-6 and G.GPS3D_DB.topDown == False, f'pitch {cam.pitch:.2f} saved {G.GPS3D_DB.topDown}')
+check('/gps3d top turns it off and back to the tilted view', not ns2.IsTopDown() and abs(cam.pitch - 45) < 1e-6 and G.GPS3D_DB.topDown == False, f'pitch {cam.pitch:.2f} saved {G.GPS3D_DB.topDown}')
 check('Northshire: buildings drawn close up, within budget', st.detail > 0 and 0 < st.detailTris <= 4000, f'blocks {st.detail} building tris {st.detailTris} grid tris {st.tris} shown {st.shown}')
 places = [
     ('Goldshire', -9464, 62, 0), ('Westfall, Sentinel Hill', -10628, 1037, 0), ('Ironforge gates (approx.)', -5000, -830, 0),
@@ -72,7 +72,7 @@ for m, name in [(0, 'Eastern Kingdoms'), (1, 'Kalimdor')]:
     G.SlashCmdList.GPS3D('')  # close
     G.SlashCmdList.GPS3D('')  # open
     tick(5)
-    ns2.modeButtons.free._scripts.OnClick(ns2.modeButtons.free)
+    ns2.SetCamMode('free')
     cam.dist, cam.pitch = 12000, 55
     t = time.time(); ns2.Render(); ms0 = (time.time() - t) * 1000
     cam.yaw = cam.yaw + 10
@@ -166,11 +166,11 @@ for k in range(12):
 moved = math.hypot(cam.x - x_start, cam.y - y_start)
 check('dragging far across tile borders works', moved > 1000 and st.shown > 100, f'moved {moved:.0f} yd ({cam.x - x_start:.0f} east), {st.tiles} tiles drawn')
 # Behind
-ns2.modeButtons.behind._scripts.OnClick(ns2.modeButtons.behind); tick(40)
+ns2.FollowMe('behind'); tick(40)
 want = (-math.degrees(pl.facing)) % 360
 check('Behind: view looks the way you face', ns2.CamMode() == 'behind' and abs(((cam.yaw - want + 540) % 360) - 180) < 1e-3 and abs(cam.x - pl.x) < 1e-6, f'yaw {cam.yaw:.2f} want {want:.2f}')
 # ---- tilt limits (right drag) and the 90-degree lock
-ns2.modeButtons.free._scripts.OnClick(ns2.modeButtons.free); tick(2)
+ns2.SetCamMode('free'); tick(2)
 def rdrag(dx, dy, n=10):
     mouse('move', 0, 0); mouse('down', 0, 0, 'RightButton')
     for k in range(1, n + 1): mouse('move', dx * k / n, dy * k / n); tick(1)
@@ -179,14 +179,14 @@ rdrag(0, 600)    # drag down a lot: tilt toward the horizon
 low_p = cam.pitch
 rdrag(0, -900)   # drag up a lot: toward straight down
 high_p = cam.pitch
-check('tilt limited to 30..90 degrees', abs(low_p - 30) < 1e-9 and abs(high_p - 89.9) < 1e-9, f'lowest {low_p:.2f}, highest {high_p:.2f}')
+check('tilt limited to 45..90 degrees (at most 45 from straight down)', abs(low_p - 45) < 1e-9 and abs(high_p - 89.9) < 1e-9, f'lowest {low_p:.2f}, highest {high_p:.2f}')
 rdrag(0, 200); before = cam.pitch
 tb = ns2.topButton
 tb._scripts.OnClick(tb); tick(30)
 yaw0 = cam.yaw
 rdrag(150, 300)
-check('90 button: straight down, locked (drag only turns), button gold, remembered',
-      abs(cam.pitch - 89.9) < 1e-9 and ns2.IsTopDown() and abs(cam.yaw - yaw0) > 10 and tuple(round(c, 3) for c in tb.color.values()) == tuple(round(c, 3) for c in G.GPS_API.colors.gold.values()) and G.GPS3D_DB.topDown == True,
+check('90 ring: straight down, locked (drag only turns), ring gold, remembered',
+      abs(cam.pitch - 89.9) < 1e-9 and ns2.IsTopDown() and abs(cam.yaw - yaw0) > 10 and tb.active == True and G.GPS3D_DB.topDown == True,
       f'pitch {cam.pitch:.2f} yaw {yaw0:.0f}->{cam.yaw:.0f} saved {G.GPS3D_DB.topDown}')
 ns2.Render()
 check('straight down: terrain drawn', st.shown > 100, f'shown {st.shown}')
@@ -197,15 +197,15 @@ check('90 button again: tilt free, back to the earlier tilt, remembered as off',
 G.SlashCmdList.GPS3D(''); G.SlashCmdList.GPS3D(''); tick(5)
 check('turned off stays off when the window opens again', not ns2.IsTopDown(), f'pitch {cam.pitch:.2f}')
 # switching back to 2D looks at the same place when free
-ns2.modeButtons.free._scripts.OnClick(ns2.modeButtons.free)
+ns2.SetCamMode('free')
 mouse('down', 0, 0, 'LeftButton'); mouse('move', -300, 0); tick(1); mouse('up', -300, 0, 'LeftButton'); tick(5)
 gx3, gy3 = cam.x / TILE, -cam.y / TILE
-ns2.ui.mode2D._scripts.OnClick(ns2.ui.mode2D); tick(3)
+ns2.ui.modeSwitch._scripts.OnClick(ns2.ui.modeSwitch); tick(3)
 v = G.SANDBOX.namespaces['GnomishPositioningSystem'].view
 check('3D -> 2D (Free): the map shows where the 3D view looked', G.GPS_MapFrame.IsShown(G.GPS_MapFrame) and abs(v.cx - gx3) < 1e-6 and abs(v.cy - gy3) < 1e-6 and not v.follow, f'{v.cx:.3f},{v.cy:.3f} vs {gx3:.3f},{gy3:.3f}')
 ns1 = G.SANDBOX.namespaces['GnomishPositioningSystem']
 v.cx, v.cy = 40.2, 30.5; v.map = 1
-ns1.ui.mode3D._scripts.OnClick(ns1.ui.mode3D); tick(5)
+ns1.ui.modeSwitch._scripts.OnClick(ns1.ui.modeSwitch); tick(5)
 check('2D -> 3D (not following): the 3D view opens where the map looked', cam.map == 1 and abs(cam.x / TILE - 40.2) < 1e-6 and abs(-cam.y / TILE - 30.5) < 1e-6, f'map {cam.map} {cam.x / TILE:.2f},{-cam.y / TILE:.2f}')
 
 # ---- constant camera height; zooming in stops at the ground (2026-10-15)
@@ -223,7 +223,7 @@ def scan(cx, cy, half, step):
             if h > 1 and (best_lo is None or h < best_lo[2]): best_lo = (cx + i, cy + j, h)
     return best_hi, best_lo
 place(-5000, -830, 0, 0.0, 'Dun Morogh', ''); tick(3)
-ns2.modeButtons.free._scripts.OnClick(ns2.modeButtons.free); tick(1)
+ns2.SetCamMode('free'); tick(1)
 cam.map = 0
 P, V = scan(pl.x, pl.y, 1200, 40)
 print('mountain', [round(v) for v in P], 'valley', [round(v) for v in V])
@@ -259,7 +259,7 @@ for k in range(40):
 check('tilted 30 deg, zooming toward a slope: never inside the ground', worst >= CLEAR - 0.5, f'lowest {worst:.2f} yd, dist now {cam.dist:.1f}')
 # a roof: Stormwind cathedral
 place(-8520, 850, 0, 0.0, 'Stormwind City', 'Cathedral Square'); tick(3)
-ns2.modeButtons.free._scripts.OnClick(ns2.modeButtons.free)
+ns2.SetCamMode('free')
 R, S = scan(pl.x, pl.y, 90, 3)
 ns2.SetTopDown(True, True); cam.x, cam.y, cam.th, cam.dist = R[0], R[1], S[2], 300; ns2.Render()
 worst = 1e9
@@ -308,7 +308,7 @@ def disc_clear():
                 best = min(best, math.sqrt(i * i + j * j + max(0.0, ez - h) ** 2))  # ground above the eye: at least its horizontal distance
     return best
 place(-9400, -1300, 0, 0.0, 'Elwynn Forest', ''); tick(3)
-ns2.modeButtons.free._scripts.OnClick(ns2.modeButtons.free); ns2.SetTopDown(False, True)
+ns2.SetCamMode('free'); ns2.SetTopDown(False, True)
 PK = (18607, -25627)
 VL = min((ns2.GroundHeight(PK[0] + i, PK[1] + j), i, j) for i in range(-700, 701, 50) for j in range(-700, 701, 50) if ns2.GroundHeight(PK[0] + i, PK[1] + j) > 1)[0]
 worst_disc, worst_ahead, miss_all, n_all, cut_all, nviews = 1e9, 1e9, 0, 0, 0, 0

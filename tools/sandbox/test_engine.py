@@ -1,6 +1,6 @@
 # Runs the sandbox engine + both addons in Lua 5.4 (as wasmoon will), drives it like the page does,
 # and renders draw lists to PNG so the engine can be checked before the browser version.
-import lupa.lua54 as lupa54, math, time, sys, os
+import lupa.lua54 as lupa54, math, time, sys, os, re
 from PIL import Image, ImageDraw
 SITE = os.path.join(os.path.dirname(__file__), 'site')
 L = lupa54.LuaRuntime()
@@ -37,8 +37,8 @@ def parse(s):
     head, body = s.split('\n\x01\n', 1)
     for line in head.split('\n'):
         if line:
-            i, t = line.split('\t', 1); dictionary[int(i)] = t
-    nums = [int(x) for x in body.split(',')] if body else []
+            i, t = line.split('\t', 1); dictionary[int(i)] = re.sub(r'\\([\\n])', lambda m: '\n' if m.group(1) == 'n' else '\\', t)
+    nums = [float(x) if '.' in x else int(x) for x in body.split(',')] if body else []  # text sizes can be fractional (SetTextScale)
     items, clips, i = [], {}, 0
     while i < len(nums):
         k = nums[i]
@@ -120,9 +120,9 @@ def click_frame(fr):
     l, b, r, t = G.SANDBOX.rect(fr)
     x, y = (l + r) / 2, (b + t) / 2
     G.SANDBOX_MOUSE('move', x, y, None, 0); G.SANDBOX_MOUSE('down', x, y, 'LeftButton', 0); G.SANDBOX_MOUSE('up', x, y, 'LeftButton', 0)
-# find mode3D button via namespace
+# find the 2D/3D ring via namespace
 ns1 = G.SANDBOX.namespaces['GnomishPositioningSystem']
-click_frame(ns1.ui.mode3D)
+click_frame(ns1.ui.modeSwitch)
 t0 = time.time(); s = tick(1/60, 1); t1 = time.time(); dl = last; chat()
 print('3D: GPS shown', ui.IsShown(ui), 'GPS3D shown', G.GPS3D_Frame.IsShown(G.GPS3D_Frame), 'items', len(dl[0]), 'tick+draw ms', round((t1-t0)*1000), 'len', len(s))
 render('t_3d.png', dl)

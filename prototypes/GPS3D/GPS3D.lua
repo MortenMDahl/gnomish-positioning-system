@@ -18,13 +18,14 @@
 -- You: an arrow lying on the ground under you, drawn in the same perspective as the terrain, and
 -- your own character model standing on it (ModelScene, same camera).
 --
--- Camera: orbits a point on the ground, in one of three modes (switch at the bottom right):
+-- Camera: orbits a point on the ground, in one of three modes (the camera ring on the right steps
+-- Follow -> Behind -> Free; Me locks back onto you):
 --   Free     look around: left drag grabs the ground and moves it, wheel zooms toward the cursor
 --   Follow   you stay in the middle; you turn the view yourself
 --   Behind   you stay in the middle and the view turns with you, looking the way you face
--- In every mode: right drag turns and tilts (30 degrees above the ground to straight down), the
--- wheel zooms, double-click flies to a spot (Free), the N compass turns back to north, and the
--- 90 degree button under it locks the view straight down. Left drag while following switches to Free.
+-- In every mode: right drag turns and tilts (45 degrees from straight down at most), the
+-- wheel zooms, double-click flies to a spot (Free), the compass ring turns back to north, and the
+-- ring under it (a grid seen from above, or in perspective) locks the view straight down or frees the tilt. Left drag while following switches to Free.
 --
 -- World coordinates here: x east, y north, h up, in yards; x = gx * TILE, y = -gy * TILE on the
 -- ADT grid (gx east, gy south), so tile (tx, ty) covers x in [tx, tx+1] * TILE, y in [-(ty+1), -ty] * TILE.
@@ -50,7 +51,7 @@ local CLEARANCE = 8                -- the camera stays at least this high above 
                                    -- ... than the ground or roofs anywhere within 25 yards of it (GroundUnder)
 local AHEAD, AHEAD_CLEAR = 1.2, 4      -- tilted: how much of the view line must clear the ground, and by how much (LiftFor)
 local AHEAD_STEP, AHEAD_SAMPLES = 6, 48 -- ... checked every 6 yards, at most 48 times
-local MIN_PITCH, MAX_PITCH = 30, 89.9 -- tilt: 30 degrees above the ground to straight down (89.9 keeps the model camera exact)
+local MIN_PITCH, MAX_PITCH = 45, 89.9 -- tilt: 45 degrees above the ground (45 from straight down) to straight down (89.9 keeps the model camera exact)
 local MODEL_YAW = math.pi / 2      -- character models face +x at yaw 0; WoW facing 0 is north (+y)
 local CLICK_TIME, CLICK_SLOP = 0.35, 4
 local TRI_BUDGET = 3200            -- grid triangles per frame (buildings come on top)
@@ -144,60 +145,67 @@ local function NewActor()
 	return ok and actor or nil
 end
 
-local ui = GPS.ApplyChrome(frame, canvas)
+local ui = GPS.ApplyChrome(frame, canvas, { mode = "3D" })
 ns.ui = ui
-ui.mode3D:SetColor(GPS.colors.gold)
 ui.prev:Hide()
 ui.next:Hide()
 ui.subtitle:ClearAllPoints()
 ui.subtitle:SetPoint("TOPLEFT", 10, -28)
 
--- Camera mode switch in place of Me: Free . Follow . Behind (the active one in gold).
-ui.me:Hide()
-ui.zoomIn:ClearAllPoints()
-ui.zoomIn:SetPoint("BOTTOMRIGHT", -16, 5)
-local modeButtons = {}
-do
-	local specs = {
-		{ "behind", "Behind", "Behind you: the view turns with you" },
-		{ "follow", "Follow", "Keep you in the middle; turn the view yourself (right-drag)" },
-		{ "free", "Free", "Look around freely (left-drag moves the view)" },
-	}
-	local anchor, gap = ui.zoomOut, -12
-	for i, s in ipairs(specs) do
-		local b = GPS.TextButton(ui.chrome, s[2], nil, s[3])
-		b:SetPoint("RIGHT", anchor, "LEFT", gap, 0)
-		modeButtons[s[1]] = b
-		anchor, gap = b, 0
-		if i < #specs then
-			local dot = ui.chrome:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-			dot:SetText("\194\183")
-			dot:SetTextColor(GPS.colors.dim[1], GPS.colors.dim[2], GPS.colors.dim[3])
-			dot:SetPoint("RIGHT", b, "LEFT", 0, 0)
-			anchor = dot
-		end
-	end
-end
-ns.modeButtons = modeButtons
-ui.footer:SetPoint("RIGHT", modeButtons.free, "LEFT", -12, 0) -- never runs under the switch
-ui.footer:SetWordWrap(false)
-
--- Compass: N sits on a small ring in the direction of north; click to face north again.
-local compass = CreateFrame("Button", nil, ui.chrome)
-compass:SetSize(30, 30)
-compass:SetPoint("TOPRIGHT", -10, -48)
-local ring = compass:CreateTexture(nil, "BACKGROUND")
-ring:SetAllPoints()
-ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-ring:SetTexCoord(0, 0.6, 0, 0.6)
-local north = compass:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-north:SetText("N")
+-- The rings down the right edge (GPS's look): compass, straight down / tilted, 2D/3D, camera mode, Me.
+-- (Lua 5.1 allows 200 local variables in the main chunk and this file is close: the helpers below
+-- live in blocks or on the buttons.)
+-- Compass: a needle pointing north (turned with the view); click to turn north up.
+local compass = GPS.RingButton(ui.chrome, { "Compass", "Click: turn north up" })
+compass:SetIcon(GPS.MEDIA .. "Needle", 0.72)
+compass.icon:SetVertexColor(1, 1, 1) -- the needle keeps its own red and grey
 ns.compass = compass
 
--- 90 degrees: locks the view straight down (the default); click again to tilt freely (remembered)
-local topButton = GPS.TextButton(ui.chrome, "90\194\176", nil, "Look straight down (click again to tilt freely)")
-topButton:SetPoint("TOP", compass, "BOTTOM", 0, -2)
+-- Straight down or tilted: the ring shows a little 2x2 grid of ground the way the camera sees it,
+-- turned with the view like the compass, square when looking straight down and in perspective when
+-- tilted (four Media\Cell squares bent with SetVertexOffset); gold while straight down is locked.
+-- Click to switch. Straight down, locked, is the default; the choice is remembered.
+local topButton = GPS.RingButton(ui.chrome, function()
+	if ns.IsTopDown() then return { "Looking straight down", "Click: tilt freely (right-drag tilts)" } end
+	return { "Tilting freely", "Click: look straight down again" }
+end)
+topButton.cells = {}
+for i = 1, 4 do
+	local t = topButton:CreateTexture(nil, "ARTWORK")
+	t:SetTexture(GPS.MEDIA .. "Cell")
+	t:SetSize(1, 1)
+	t:SetPoint("CENTER", topButton, "CENTER", 0, topButton.centreY)
+	topButton.cells[i] = t
+end
+do
+	local SetActive = topButton.SetActive
+	function topButton:SetActive(on)
+		SetActive(self, on)
+		local c = self.active and GPS.colors.gold or GPS.colors.brass
+		for _, t in ipairs(self.cells) do t:SetVertexColor(c[1], c[2], c[3]) end
+	end
+end
+topButton:SetActive(false)
 ns.topButton = topButton
+
+-- Camera mode: one ring that steps Follow -> Behind -> Free, showing the mode it is in (a dot with
+-- the view circling it, your arrow with the view's cone behind it, four arrows); gold while it is
+-- locked onto you.
+local camButton
+do
+	local CAMERA_TIPS = {
+		follow = { "Camera: following you", "Click: behind you", "Right-drag: turn and tilt   Wheel: zoom   Drag: look around" },
+		behind = { "Camera: behind you", "Click: free camera", "Right-drag: look aside and tilt   Wheel: zoom   Drag: look around" },
+		free = { "Camera: free", "Click: follow you", "Drag: move   Right-drag: turn and tilt   Wheel: zoom   Double-click: go there" },
+	}
+	camButton = GPS.RingButton(ui.chrome, function() return CAMERA_TIPS[ns.CamMode()] end)
+end
+camButton.icons = { follow = GPS.MEDIA .. "CamFollow", behind = GPS.MEDIA .. "CamBehind", free = GPS.MEDIA .. "CamFree" }
+camButton:SetIcon(camButton.icons.free, 0.62)
+ns.camButton = camButton
+
+ui.me.tooltip = { "Me", "Centre on you and follow (Follow or Behind, as you last chose)" }
+ui.SetRings({ compass, topButton, ui.modeSwitch, camButton, ui.me })
 
 ------------------------------------------------------------------------------------------------
 -- World data: heights per tile, decoded when first needed
@@ -743,8 +751,8 @@ local markerMode = "both" -- arrow | model | both
 ------------------------------------------------------------------------------------------------
 -- Camera
 ------------------------------------------------------------------------------------------------
-local cam = { map = 0, x = 32 * TILE + 173, y = -48 * TILE - 385, th = 80, dist = 330, yaw = 20, pitch = 32 }
-local topDown = false -- the 90 degree button: tilt locked straight down
+local cam = { map = 0, x = 32 * TILE + 173, y = -48 * TILE - 385, th = 80, dist = 330, yaw = 20, pitch = 45 }
+local topDown = false -- the straight-down ring: tilt locked straight down
 ns.cam = cam
 local camMode = "free" -- free | follow | behind
 local yawOffset = 0     -- Behind: how far you turned the view away from your facing (right-drag)
@@ -1372,13 +1380,58 @@ local function UpdateMarker()
 end
 
 local compassYaw
+-- The grid in the straight-down ring: ground squares u (east) and v (north) from -1 to 1, turned
+-- anticlockwise by the yaw like the needle, then seen from GRID_D squares away at the camera's tilt.
+local UpdateGrid
+do -- (in a block: the main chunk is near Lua 5.1's limit of 200 local variables)
+	local GRID_D = 4            -- viewing distance in grid squares: how strong the perspective is
+	local GRID_E = 1 / 6        -- the cell texture's inset (1/8 of it each side), in grid squares
+	local GRID_R = 0.3          -- the grid stays within this share of the ring's width from its centre
+	local gridFit = {}          -- tilt (tenths of a degree) -> px per grid square
+	local CELLS = { { -1, -1 }, { 0, -1 }, { -1, 0 }, { 0, 0 } }
+	local function GridPoint(u, v, ct, st, sp, cp, scale)
+		local x, f = u * ct - v * st, u * st + v * ct -- right, and forward (away from the camera)
+		local k = GRID_D / (GRID_D + f * cp)
+		return x * k * scale, f * sp * k * scale
+	end
+	function UpdateGrid()
+		local p, t = rad(cam.pitch), rad(cam.yaw)
+		local sp, cp, ct, st = sin(p), cos(p), cos(t), sin(t)
+		local key = floor(cam.pitch * 10 + 0.5)
+		local scale = gridFit[key]
+		if not scale then
+			-- the furthest a grid corner gets from the centre at this tilt, over every turn
+			local worst = 0
+			for i = 0, 63 do
+				local a = i * math.pi / 32
+				local x, y = GridPoint(1.4143 * cos(a), 1.4143 * sin(a), 1, 0, sp, cp, 1)
+				worst = max(worst, sqrt(x * x + y * y))
+			end
+			scale = topButton:GetWidth() * GRID_R / worst
+			gridFit[key] = scale
+		end
+		local lo, hi = -GRID_E, 1 + GRID_E
+		for i, c in ipairs(CELLS) do
+			local tex, u0, v0 = topButton.cells[i], c[1], c[2]
+			-- corners: 1 upper left (far left), 2 lower left, 3 upper right, 4 lower right; the
+			-- texture is 1x1 at the ring's centre, so each offset is the corner's place minus (-+0.5, +-0.5)
+			local x, y = GridPoint(u0 + lo, v0 + hi, ct, st, sp, cp, scale); SetVertexOffset(tex, 1, x + 0.5, y - 0.5)
+			x, y = GridPoint(u0 + lo, v0 + lo, ct, st, sp, cp, scale); SetVertexOffset(tex, 2, x + 0.5, y + 0.5)
+			x, y = GridPoint(u0 + hi, v0 + hi, ct, st, sp, cp, scale); SetVertexOffset(tex, 3, x - 0.5, y - 0.5)
+			x, y = GridPoint(u0 + hi, v0 + lo, ct, st, sp, cp, scale); SetVertexOffset(tex, 4, x - 0.5, y + 0.5)
+		end
+	end
+
+end
+ns.UpdateGrid = UpdateGrid
+
 local function UpdateCompass()
 	-- north on screen: the direction +y points to, seen from above the orbit point
-	if cam.yaw == compassYaw then return end
-	compassYaw = cam.yaw
-	local yaw = rad(cam.yaw)
-	north:ClearAllPoints()
-	north:SetPoint("CENTER", compass, "CENTER", -sin(yaw) * 9, cos(yaw) * 9)
+	if cam.yaw == compassYaw and cam.pitch == compass.pitch then return end
+	compassYaw, compass.pitch = cam.yaw, cam.pitch
+	-- north on screen is at (-sin yaw, cos yaw): the needle (drawn pointing up) turned anticlockwise by yaw
+	compass.icon:SetRotation(rad(cam.yaw))
+	UpdateGrid()
 end
 
 local function MapName(map)
@@ -1392,24 +1445,26 @@ local function UpdateTitle()
 	local zone = onMap and GetZoneText and GetZoneText() or nil
 	local text = (zone and zone ~= "") and zone or MapName(cam.map)
 	if text ~= titleText then ui.title:SetText(text); titleText = text end
-	if cam.map ~= subtitleMap then ui.subtitle:SetText(MapName(cam.map) .. "   3D"); subtitleMap = cam.map end
+	if cam.map ~= subtitleMap then ui.subtitle:SetText(MapName(cam.map)); subtitleMap = cam.map end
 end
 
-local function UpdateFooter()
-	if not player.on then
-		if player.why == "nodata" then
-			ui.footer:SetText(("No 3D terrain for %s (only maps with outdoor terrain have it)"):format(MapName(player.map)))
+local UpdateFooter
+do
+	local CAMERA_WORDS = { follow = "Following", behind = "Behind you", free = "Free camera" }
+	function UpdateFooter()
+		if not player.on then
+			if player.why == "nodata" then
+				ui.footer:SetText(("No 3D terrain for %s (only maps with outdoor terrain have it)"):format(MapName(player.map)))
+			else
+				ui.footer:SetText("Your position is not available here.   /gps3d pretend shows a stand-in")
+			end
+		elseif player.map ~= cam.map then
+			ui.footer:SetText("You are on another map.   Me brings the view to you")
 		else
-			ui.footer:SetText("Your position is not available here.   /gps3d pretend shows a stand-in")
+			-- where you are, and the camera mode in brass (the controls are in the rings' tooltips)
+			local where = (not ns.fake and GPS.WhereText) and GPS.WhereText() or ""
+			ui.footer:SetText(("%s%s|cffc9a24a%s|r"):format(where, where ~= "" and "   " or "", CAMERA_WORDS[camMode] or ""))
 		end
-	elseif player.map ~= cam.map then
-		ui.footer:SetText("You are on another map.   Follow or Behind brings the view to you")
-	elseif camMode == "behind" then
-		ui.footer:SetText("Behind you   right-drag: look aside and tilt   wheel: zoom   drag: look around")
-	elseif camMode == "follow" then
-		ui.footer:SetText("Following you   right-drag: turn and tilt   wheel: zoom   drag: look around")
-	else
-		ui.footer:SetText("Drag: move   right-drag: turn and tilt   wheel: zoom   double-click: go there")
 	end
 end
 
@@ -1451,7 +1506,9 @@ local function BehindYaw() return (-deg(player.facing) + yawOffset) % 360 end
 
 local function SetCamMode(mode)
 	camMode = mode
-	for m, b in pairs(modeButtons) do b:SetColor(m == mode and GPS.colors.gold or GPS.colors.grey) end
+	camButton:SetIcon(camButton.icons[mode], 0.62)
+	camButton:SetActive(mode ~= "free") -- gold while locked onto you
+	ui.me:SetActive(mode ~= "free")
 	if mode ~= "free" then
 		GPS3D_DB = GPS3D_DB or {}
 		GPS3D_DB.camMode = mode -- the way you like to be followed, used when the window opens
@@ -1459,6 +1516,7 @@ local function SetCamMode(mode)
 	UpdateFooter()
 end
 ns.CamMode = function() return camMode end
+ns.SetCamMode = SetCamMode
 ns.IsFollowing = Following
 
 -- Smoothly moves the camera to new values (x, y, th, dist, yaw, pitch).
@@ -1473,7 +1531,7 @@ ns.FlyTo = FlyTo
 -- Locks the view straight down, or gives back the tilt it had before.
 local function SetTopDown(on, instant)
 	topDown = on and true or false
-	topButton:SetColor(topDown and GPS.colors.gold or GPS.colors.grey)
+	topButton:SetActive(topDown)
 	GPS3D_DB = GPS3D_DB or {}
 	GPS3D_DB.topDown = topDown -- false is remembered too (straight down is the default)
 	local want
@@ -1673,9 +1731,14 @@ frame:SetScript("OnMouseWheel", function(_, delta)
 end)
 ui.zoomIn:SetScript("OnClick", function() Zoom(0.8) end)
 ui.zoomOut:SetScript("OnClick", function() Zoom(1.25) end)
-modeButtons.follow:SetScript("OnClick", function() FollowMe("follow") end)
-modeButtons.behind:SetScript("OnClick", function() FollowMe("behind") end)
-modeButtons.free:SetScript("OnClick", function() SetCamMode("free") end)
+-- the camera ring steps Follow -> Behind -> Free -> Follow
+camButton:SetScript("OnClick", function(self)
+	if camMode == "follow" then FollowMe("behind")
+	elseif camMode == "behind" then SetCamMode("free")
+	else FollowMe("follow") end
+	if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end -- the tip follows the mode
+end)
+ui.me:SetScript("OnClick", function() FollowMe() end)
 compass:SetScript("OnClick", function()
 	if camMode == "behind" then SetCamMode("follow") end -- north up means no longer turning with you
 	FlyTo({ yaw = 0 }, 0.4)
@@ -1743,7 +1806,7 @@ local function Open()
 	if GPS3D_DB.buildings then DETAIL_BUDGET = GPS3D_DB.buildings end
 	anim = nil
 	cam.pitch = max(MIN_PITCH, min(MAX_PITCH, cam.pitch))
-	if GPS3D_DB.topDown ~= false then SetTopDown(true, true) else topButton:SetColor(GPS.colors.grey) end -- straight down unless turned off
+	if GPS3D_DB.topDown ~= false then SetTopDown(true, true) else topButton:SetActive(false) end -- straight down unless turned off
 	ReadPlayer()
 	local focus = pendingFocus
 	pendingFocus = nil
@@ -1768,7 +1831,7 @@ end
 
 frame:SetScript("OnShow", function() Open() end)
 
-ui.mode2D:SetScript("OnClick", function()
+ui.modeSwitch:SetScript("OnClick", function()
 	-- back to 2D at the same place and size, looking where the 3D view looks
 	GPS.Show(frame, not Following() and { map = cam.map, gx = cam.x / TILE, gy = -cam.y / TILE } or nil)
 	frame:Hide()
@@ -1878,6 +1941,8 @@ local function SelfTest()
 			end
 		end
 		Report("images: %d of %d different terrain images in view report loaded", loaded, checked)
+		local icons = (compass.icon:IsObjectLoaded() and 1 or 0) + (camButton.icon:IsObjectLoaded() and 1 or 0) + (topButton.cells[1]:IsObjectLoaded() and 1 or 0)
+		Report("icons: %d of 3 (compass needle, camera mode, grid square from Media\\) loaded", icons)
 		Report("marker (%s): arrow %s, character model %s; camera %s", markerMode, decal:IsShown() and "shown" or "hidden", playerActor and ("loaded=" .. tostring((playerActor:IsLoaded()))) or "not created", camMode)
 		Report("done")
 	end)
@@ -1894,7 +1959,7 @@ end
 -- /gps3d detail <on|off>  buildings close up, or the grid everywhere
 -- /gps3d budget <n>       grid triangles per frame (default 3200)
 -- /gps3d buildings <n>    building triangles per frame (default 4000)
--- /gps3d top              look straight down (locked), or tilt freely again (the 90 degree button)
+-- /gps3d top              look straight down (locked), or tilt freely again (the straight-down ring)
 -- /gps3d model [id]       any model by FileDataID at the centre (default: an Elwynn tree, 189927;
 --                         106965 is the Elwynn farmhouse WMO, to see whether buildings load)
 -- /gps3d trees            scatter 40 trees around the centre

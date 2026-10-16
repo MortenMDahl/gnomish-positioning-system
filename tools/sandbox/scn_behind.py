@@ -1,7 +1,7 @@
 async def run():
     await ev('__sandbox.lua().run("function SANDBOX_GETTMP() return SANDBOX_TMP end")')
     await page.click('#btn-3d'); await page.wait_for_timeout(2000)
-    pos = await ev('(() => { const L = __sandbox.lua(); L.run("local b = SANDBOX.namespaces.GPS3D.modeButtons.behind; local l,bb,r,t = SANDBOX.rect(b); SANDBOX_TMP = string.format(\'%f,%f\', (l+r)/2, (bb+t)/2)"); return L.call("SANDBOX_GETTMP"); })()')
+    pos = await ev('(() => { const L = __sandbox.lua(); L.run("local b = SANDBOX.namespaces.GPS3D.camButton; local l,bb,r,t = SANDBOX.rect(b); SANDBOX_TMP = string.format(\'%f,%f\', (l+r)/2, (bb+t)/2)"); return L.call("SANDBOX_GETTMP"); })()')
     ux, uy = [float(v) for v in pos.split(',')]
     x0, y0, w, h = await canvas_box()
     s = await ev('(() => { const r = document.getElementById("gl").getBoundingClientRect(); return Math.max(0.6, Math.min(1, r.width / 560, r.height / 520)); })()')

@@ -62,11 +62,37 @@ do
 end
 
 ------------------------------------------------------------------------------------------------
--- Look: "tooltip slim" (design/gps-style-2d-3d.png, option 2). Shared with GPS3D through
--- GPS_API.ApplyChrome so both windows look and behave the same.
+-- Look: "minimap rings" (option B of the look study, 2026-10-16). A frameless map with a thin
+-- black edge, the title and map switch at the top left, the window's controls as round buttons in
+-- the minimap's gold ring down the right edge, smaller rings with + and - at the bottom right, and
+-- where you are at the bottom left. Built only from art Forever's own interface uses
+-- (MiniMap-TrackingBorder, UI-Minimap-Background, UI-Minimap-ZoomButton-Highlight, the RedButton-*
+-- atlases) plus a few small icons in Media\.
+-- Shared with GPS3D through GPS_API.ApplyChrome / GPS_API.RingButton so both windows look and
+-- behave the same.
 ------------------------------------------------------------------------------------------------
 local GOLD, GREY, DIM = { 1, 0.82, 0 }, { 0.8, 0.8, 0.8 }, { 0.45, 0.45, 0.45 }
-ns.colors = { gold = GOLD, grey = GREY, dim = DIM }
+local BRASS = { 0.79, 0.64, 0.29 }   -- ring labels and icons at rest (muted, like old brass)
+ns.colors = { gold = GOLD, grey = GREY, dim = DIM, brass = BRASS }
+local MEDIA = ADDON_PATH .. "Media\\"
+ns.MEDIA = MEDIA
+local RING = 30                      -- ring button size in px
+local RING_GAP = 3
+
+-- Tooltip for a button: a title and optional extra lines (grey).
+local function ShowTooltip(self)
+	local tip = self.tooltip
+	if not tip then return end
+	GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+	if type(tip) == "function" then tip = tip(self) end
+	if type(tip) == "table" then
+		GameTooltip:SetText(tip[1], 1, 1, 1)
+		for i = 2, #tip do GameTooltip:AddLine(tip[i], GREY[1], GREY[2], GREY[3], true) end
+	else
+		GameTooltip:SetText(tip, 1, 1, 1)
+	end
+	GameTooltip:Show()
+end
 
 -- A plain text button: grey, white on hover, gold when active.
 local function TextButton(parent, text, font, tooltip)
@@ -87,11 +113,7 @@ local function TextButton(parent, text, font, tooltip)
 	b:SetColor(GREY)
 	b:SetScript("OnEnter", function(self)
 		fs:SetTextColor(1, 1, 1)
-		if self.tooltip then
-			GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-			GameTooltip:SetText(self.tooltip)
-			GameTooltip:Show()
-		end
+		ShowTooltip(self)
 	end)
 	b:SetScript("OnLeave", function(self)
 		self:SetColor(self.color)
@@ -101,6 +123,111 @@ local function TextButton(parent, text, font, tooltip)
 	return b
 end
 ns.TextButton = TextButton
+
+-- A round button in the minimap's gold ring (the look of the minimap's tracking button): a dark
+-- disc, the ring, and either a short label or a small icon in the middle. Brass at rest, gold when
+-- active (SetActive), lit by the minimap zoom buttons' highlight on hover.
+-- The ring texture (64x64) holds the ring in its top-left corner: gold from texel 4 to 34 across
+-- and 4 to 33 down. Cropping texels 0..39 puts it in the middle of the button across and half a
+-- texel above the middle, so the disc, label and icon sit that much (centreY) above the centre.
+local RING_TC = 39 / 64
+local LABEL_FIT = 0.40               -- a label is shrunk to fit this share of the ring's width
+-- size: the ring's size in px (RING unless given).
+local function RingButton(parent, tooltip, size)
+	local RING = size or RING
+	local b = CreateFrame("Button", nil, parent)
+	b:SetSize(RING, RING)
+	b:RegisterForClicks("LeftButtonUp")
+	local up = RING * 0.5 / 39
+	local disc = b:CreateTexture(nil, "BACKGROUND")
+	disc:SetTexture("Interface\\Minimap\\UI-Minimap-Background")
+	disc:SetVertexColor(0.55, 0.55, 0.55)
+	disc:SetSize(RING * 0.66, RING * 0.66)
+	disc:SetPoint("CENTER", 0, up)
+	local ring = b:CreateTexture(nil, "OVERLAY")
+	ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+	ring:SetTexCoord(0, RING_TC, 0, RING_TC)
+	ring:SetAllPoints()
+	local glow = b:CreateTexture(nil, "HIGHLIGHT")
+	glow:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+	glow:SetBlendMode("ADD")
+	glow:SetSize(RING * 0.8, RING * 0.8)
+	glow:SetPoint("CENTER", 0, up)
+	local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	fs:SetPoint("CENTER", 0, up)
+	fs:SetShadowOffset(1, -1)
+	fs:SetShadowColor(0, 0, 0, 1)
+	local icon = b:CreateTexture(nil, "ARTWORK")
+	icon:SetSize(RING * 0.5, RING * 0.5)
+	icon:SetPoint("CENTER", 0, up)
+	icon:Hide()
+	b.label, b.icon, b.disc, b.ring = fs, icon, disc, ring
+	b.centreY = up
+	function b:SetLabel(t)
+		fs:SetText(t)
+		-- shrink a wide label (such as 90 degrees) to sit inside the ring's hole
+		fs:SetTextScale(1)
+		local w = fs:GetStringWidth() or 0
+		fs:SetTextScale(w > RING * LABEL_FIT and RING * LABEL_FIT / w or 1)
+		fs:Show()
+		icon:Hide()
+	end
+	-- dx, dy (px): a nudge for an image whose drawing is not centred in it
+	function b:SetIcon(file, size, dx, dy)
+		icon:SetTexture(file)
+		icon:SetSize(RING * (size or 0.5), RING * (size or 0.5))
+		icon:ClearAllPoints()
+		icon:SetPoint("CENTER", dx or 0, up + (dy or 0))
+		icon:Show()
+		fs:Hide()
+	end
+	function b:SetActive(on)
+		self.active = on and true or false
+		local c = self.active and GOLD or BRASS
+		fs:SetTextColor(c[1], c[2], c[3])
+		icon:SetVertexColor(c[1], c[2], c[3])
+	end
+	b:SetScript("OnEnter", ShowTooltip)
+	b:SetScript("OnLeave", function() GameTooltip_Hide() end)
+	b.tooltip = tooltip
+	b:SetActive(false)
+	return b
+end
+ns.RingButton = RingButton
+
+-- A zoom button: a ring like the others with a small plus or minus drawn in brass with a black edge
+-- (the minimap's own zoom-button art has its sign drawn in, too big for this look). The sign shifts
+-- a pixel while pressed.
+local ZOOM, SIGN = RING, 9           -- ring size, and the sign's length, in px
+local function ZoomButton(parent, dir, tooltip)
+	local b = RingButton(parent, tooltip, ZOOM)
+	local len, thick = SIGN, 2
+	local bars = {}
+	local function Bar(w, h, layer, sub, color)
+		local t = b:CreateTexture(nil, layer, nil, sub)
+		t:SetTexture("Interface\\Buttons\\WHITE8X8")
+		t:SetVertexColor(color[1], color[2], color[3], color[4] or 1)
+		t:SetSize(w, h)
+		bars[#bars + 1] = t
+		return t
+	end
+	local black = { 0, 0, 0, 0.9 }
+	Bar(len + 2, thick + 2, "ARTWORK", 0, black)
+	if dir == "in" then Bar(thick + 2, len + 2, "ARTWORK", 0, black) end
+	Bar(len, thick, "ARTWORK", 1, BRASS)
+	if dir == "in" then Bar(thick, len, "ARTWORK", 1, BRASS) end
+	local function Place(dx, dy)
+		for _, t in ipairs(bars) do
+			t:ClearAllPoints()
+			t:SetPoint("CENTER", dx, b.centreY + dy)
+		end
+	end
+	Place(0, 0)
+	b:HookScript("OnMouseDown", function() Place(1, -1) end)
+	b:HookScript("OnMouseUp", function() Place(0, 0) end)
+	b.bars = bars
+	return b
+end
 
 local function Shade(parent, top, height)
 	local t = parent:CreateTexture(nil, "BACKGROUND")
@@ -118,21 +245,24 @@ local function Shade(parent, top, height)
 end
 
 -- Dresses a window (a BackdropTemplate frame) and its map canvas in the GPS look and returns its
--- controls: title, subtitle with prev/next, 2D/3D switch, close, footer text, zoom -/+ and Me.
--- opts.onMoved / opts.onSized are called after the user moves or resizes the window.
+-- controls: title, subtitle with prev/next, close, footer text, zoom in/out, the 2D/3D ring
+-- (modeSwitch, labelled with the view it is in) and the Me ring, plus ui.SetRings(list) to lay out
+-- the column of rings down the right edge (top to bottom; GPS3D adds its own).
+-- opts.mode is "2D" or "3D"; opts.onMoved / opts.onSized are called after the user moves or
+-- resizes the window.
 function ns.ApplyChrome(frame, canvas, opts)
 	opts = opts or {}
 	frame:SetBackdrop({
 		bgFile = "Interface\\Buttons\\WHITE8X8",
-		edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-		edgeSize = 14,
-		insets = { left = 3, right = 3, top = 3, bottom = 3 },
+		edgeFile = "Interface\\Buttons\\WHITE8X8",
+		edgeSize = 1,
+		insets = { left = 1, right = 1, top = 1, bottom = 1 },
 	})
-	frame:SetBackdropColor(0, 0, 0, 0.85)
-	frame:SetBackdropBorderColor(0.8, 0.8, 0.8, 1)
+	frame:SetBackdropColor(0, 0, 0, 1)
+	frame:SetBackdropBorderColor(0, 0, 0, 1)
 	canvas:ClearAllPoints()
-	canvas:SetPoint("TOPLEFT", frame, "TOPLEFT", 5, -5)
-	canvas:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -5, 5)
+	canvas:SetPoint("TOPLEFT", frame, "TOPLEFT", 1, -1)
+	canvas:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -1, 1)
 
 	local ui = {}
 	local chrome = CreateFrame("Frame", nil, frame)
@@ -142,10 +272,10 @@ function ns.ApplyChrome(frame, canvas, opts)
 	Shade(chrome, true, 56)
 	Shade(chrome, false, 36)
 
-	-- Top band: drag to move the window; holds the title and the top controls.
+	-- Top band: drag to move the window; holds the title and the map switch.
 	local band = CreateFrame("Frame", nil, chrome)
 	band:SetPoint("TOPLEFT")
-	band:SetPoint("TOPRIGHT")
+	band:SetPoint("TOPRIGHT", -40, 0) -- leaves the close button and the rings their clicks
 	band:SetHeight(46)
 	band:EnableMouse(true)
 	band:RegisterForDrag("LeftButton")
@@ -156,41 +286,72 @@ function ns.ApplyChrome(frame, canvas, opts)
 	ui.title = band:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	ui.title:SetPoint("TOPLEFT", 10, -8)
 	ui.title:SetJustifyH("LEFT")
+	ui.title:SetShadowOffset(1, -1)
 	ui.prev = TextButton(band, "<", nil, "Previous map")
 	ui.prev:SetPoint("TOPLEFT", 4, -26)
 	ui.subtitle = band:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	ui.subtitle:SetPoint("LEFT", ui.prev, "RIGHT", 0, 0)
 	ui.subtitle:SetTextColor(GREY[1], GREY[2], GREY[3])
+	ui.subtitle:SetShadowOffset(1, -1)
 	ui.next = TextButton(band, ">", nil, "Next map")
 	ui.next:SetPoint("LEFT", ui.subtitle, "RIGHT", 0, 0)
 
-	ui.close = TextButton(band, "\195\151", "GameFontHighlight", "Close") -- multiplication sign
-	ui.close:SetPoint("TOPRIGHT", -4, -5)
-	ui.close:SetScript("OnClick", function() frame:Hide() end)
-	ui.mode3D = TextButton(band, "3D", nil, "3D perspective view")
-	ui.mode3D:SetPoint("RIGHT", ui.close, "LEFT", -6, 0)
-	ui.dot = band:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	ui.dot:SetText("\194\183") -- middle dot
-	ui.dot:SetTextColor(DIM[1], DIM[2], DIM[3])
-	ui.dot:SetPoint("RIGHT", ui.mode3D, "LEFT", 0, 0)
-	ui.mode2D = TextButton(band, "2D", nil, "Top-down map")
-	ui.mode2D:SetPoint("RIGHT", ui.dot, "LEFT", 0, 0)
+	-- Close: Blizzard's own red close button art.
+	local close = CreateFrame("Button", nil, chrome)
+	close:SetSize(24, 24)
+	close:SetPoint("TOPRIGHT", -6, -6)
+	close:SetNormalAtlas("RedButton-Exit")
+	close:SetPushedAtlas("RedButton-exit-pressed")
+	close:SetHighlightAtlas("RedButton-Highlight", "ADD")
+	close:SetScript("OnClick", function() frame:Hide() end)
+	close:SetScript("OnEnter", ShowTooltip)
+	close:SetScript("OnLeave", function() GameTooltip_Hide() end)
+	close.tooltip = "Close"
+	ui.close = close
 
-	-- Bottom: status text on the left, zoom and Me on the right.
+	-- The rings down the right edge, under the close button.
+	ui.modeSwitch = RingButton(chrome)
+	ui.modeSwitch:SetLabel(opts.mode or "2D")
+	if (opts.mode or "2D") == "2D" then
+		ui.modeSwitch.tooltip = { "2D map", "Click: 3D view of the same place" }
+	else
+		ui.modeSwitch.tooltip = { "3D view", "Click: 2D map of the same place" }
+	end
+	ui.me = RingButton(chrome)
+	ui.me:SetIcon("Interface\\Minimap\\MinimapArrow", 0.72)
+	ui.me.tooltip = { "Me", "Centre on you and follow" }
+	function ui.SetRings(list)
+		local above
+		for _, b in ipairs(list) do
+			b:ClearAllPoints()
+			if above then
+				b:SetPoint("TOP", above, "BOTTOM", 0, -RING_GAP)
+			else
+				b:SetPoint("TOPRIGHT", chrome, "TOPRIGHT", -6, -36)
+			end
+			b:Show()
+			above = b
+		end
+		ui.rings = list
+	end
+	ui.SetRings({ ui.modeSwitch, ui.me })
+
+	-- Bottom: where you are on the left, the minimap's zoom buttons on the right.
 	ui.footer = chrome:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	ui.footer:SetPoint("BOTTOMLEFT", 10, 9)
 	ui.footer:SetJustifyH("LEFT")
 	ui.footer:SetTextColor(GREY[1], GREY[2], GREY[3])
-	ui.me = TextButton(chrome, "Me", nil, "Centre on you and follow")
-	ui.me:SetPoint("BOTTOMRIGHT", -16, 5)
-	ui.zoomIn = TextButton(chrome, "+", nil, "Zoom in")
-	ui.zoomIn:SetPoint("RIGHT", ui.me, "LEFT", -2, 0)
-	ui.zoomOut = TextButton(chrome, "-", nil, "Zoom out")
-	ui.zoomOut:SetPoint("RIGHT", ui.zoomIn, "LEFT", -2, 0)
+	ui.footer:SetShadowOffset(1, -1)
+	ui.zoomOut = ZoomButton(chrome, "out", "Zoom out")
+	ui.zoomOut:SetPoint("BOTTOMRIGHT", -6, 12) -- under the rings, clear of the resize grip
+	ui.zoomIn = ZoomButton(chrome, "in", "Zoom in")
+	ui.zoomIn:SetPoint("BOTTOM", ui.zoomOut, "TOP", 0, RING_GAP)
+	ui.footer:SetPoint("RIGHT", ui.zoomOut, "LEFT", -12, 0)
+	ui.footer:SetWordWrap(false)
 
 	local grip = CreateFrame("Button", nil, chrome)
 	grip:SetSize(12, 12)
-	grip:SetPoint("BOTTOMRIGHT", 3, -3)
+	grip:SetPoint("BOTTOMRIGHT", 0, 0)
 	grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 	grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
 	grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
@@ -243,6 +404,7 @@ arrow:Hide()
 ns.arrow = arrow
 
 local ui = ns.ApplyChrome(frame, canvas, {
+	mode = "2D",
 	onMoved = function() ns.SaveFrame() end,
 	onSized = function() ns.SaveFrame(); ns.Layout() end,
 })
@@ -455,8 +617,7 @@ end
 ui.prev:SetScript("OnClick", function() ns.CycleMap(-1) end)
 ui.next:SetScript("OnClick", function() ns.CycleMap(1) end)
 ui.me:SetScript("OnClick", function() ns.FollowPlayer() end)
-ui.mode2D:SetColor(GOLD)
-ui.mode3D:SetScript("OnClick", function()
+ui.modeSwitch:SetScript("OnClick", function()
 	if GPS3D_API and GPS3D_API.Show then
 		-- the 3D view opens where this map looks (or on you, when following)
 		GPS3D_API.Show(frame, not view.follow and { map = view.map, gx = view.cx, gy = view.cy } or nil)
@@ -513,6 +674,18 @@ end)
 ui.zoomIn:SetScript("OnClick", function() local w, h = canvas:GetSize(); ns.ZoomAt(w / 2, h / 2, 1.25) end)
 ui.zoomOut:SetScript("OnClick", function() local w, h = canvas:GetSize(); ns.ZoomAt(w / 2, h / 2, 0.8) end)
 
+-- Where you are, for the footers: subzone (or zone) and the usual map coordinates.
+function ns.WhereText()
+	local sub = (GetSubZoneText and GetSubZoneText()) or ""
+	if sub == "" then sub = (GetZoneText and GetZoneText()) or "" end
+	local uiMap = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+	local pos = uiMap and C_Map.GetPlayerMapPosition(uiMap, "player")
+	if pos and Usable(pos.x) and Usable(pos.y) then
+		return ("%s   %.1f, %.1f"):format(sub, pos.x * 100, pos.y * 100)
+	end
+	return sub
+end
+
 -- Footer: what is under the cursor, in tiles and world yards (handy for checking alignment).
 local elapsedSince = 0
 frame:SetScript("OnUpdate", function(_, elapsed)
@@ -521,6 +694,7 @@ frame:SetScript("OnUpdate", function(_, elapsed)
 	elapsedSince = 0
 	ns.UpdatePlayer()
 	UpdateTitle()
+	if ui.me.active ~= view.follow then ui.me:SetActive(view.follow) end -- the Me ring is gold while following you
 	if canvas:IsMouseOver() and ns.debugGrid then
 		-- with /gps grid on: what is under the cursor, in tiles and world yards
 		local gx, gy = ns.ScreenToGrid(CursorInCanvas())
@@ -529,19 +703,7 @@ frame:SetScript("OnUpdate", function(_, elapsed)
 	else
 		-- where you are: subzone and the usual map coordinates
 		local mapID = ns.PlayerPosition()
-		local text = ""
-		if mapID == view.map then
-			local sub = (GetSubZoneText and GetSubZoneText()) or ""
-			if sub == "" then sub = (GetZoneText and GetZoneText()) or "" end
-			local ui_ = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
-			local pos = ui_ and C_Map.GetPlayerMapPosition(ui_, "player")
-			if pos and Usable(pos.x) then
-				text = ("%s   %.1f, %.1f"):format(sub, pos.x * 100, pos.y * 100)
-			else
-				text = sub
-			end
-		end
-		footer:SetText(text)
+		footer:SetText(mapID == view.map and ns.WhereText() or "")
 	end
 end)
 
@@ -595,6 +757,9 @@ end
 GPS_API = {
 	ApplyChrome = ns.ApplyChrome,
 	TextButton = ns.TextButton,
+	RingButton = ns.RingButton,
+	MEDIA = ns.MEDIA,
+	WhereText = ns.WhereText,
 	CopyGeometry = ns.CopyGeometry,
 	colors = ns.colors,
 	-- from: a window whose place and size to take; focus: { map, gx, gy } to look at (nil: as before)
@@ -691,6 +856,15 @@ function ns.SelfTest()
 			end
 		end
 		Report("overview images: %d of %d report loaded", ok, shown)
+		-- the look borrows the game's art: does each piece load?
+		local u = ns.ui -- (ui is the map ID in this function)
+		local parts = { "close", u.close:GetNormalTexture(), "ring", u.me.ring, "disc", u.me.disc, "arrow", u.me.icon }
+		local bad = {}
+		for i = 1, #parts, 2 do
+			local t = parts[i + 1]
+			if not (t and t.IsObjectLoaded and t:IsObjectLoaded()) then bad[#bad + 1] = parts[i] end
+		end
+		Report("look: %s", #bad == 0 and "close, ring, disc and arrow art loaded" or ("NOT loaded: " .. table.concat(bad, ", ")))
 		Report("done. Now look: real terrain on screen, arrow where you stand (/gps grid shows tile numbers)")
 	end)
 end
