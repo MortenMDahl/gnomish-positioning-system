@@ -19,6 +19,12 @@
 -- loaded within WMO_WAIT seconds the simplified shapes stay (said once in chat and in the debug log).
 -- The result is saved per build (GPS3D_DB.wmoCheck); /gps3d models wmo checks again.
 --
+-- Caves and mines (kind 2 in the data: WMOs whose rooms and rock shell lie in the ground, see
+-- scripts/browser_underground.js) are buildings like the others when the game draws WMOs (since
+-- 2026-10-18; /gps3d models caves off leaves them out, should their tunnels show through the ground:
+-- the terrain is not in the scene's depth buffer, so only the cave's own rock hides them). With the
+-- game's buildings refused they stay as simplified shapes of their outside parts.
+--
 -- Placement (build_models.py): position x east, y north, h up; rotation yaw, pitch, roll, applied
 -- as Rz(yaw) Ry(pitch) Rx(roll), which is the actor's SetYaw / SetPitch / SetRoll; scale.
 local addonName, ns = ...
@@ -35,7 +41,7 @@ local POOL_LIMIT = 3000  -- actors at most
 local OFF = 131072
 local WMO_PROBE, M2_PROBE = 106965, 189927 -- the Elwynn farmhouse (a building), an Elwynn tree
 
-ns.modelDefaults = { buildingModels = "game", props = true, modelCount = 250, modelRange = 600, modelPx = 6 }
+ns.modelDefaults = { buildingModels = "game", props = true, caves = true, modelCount = 250, modelRange = 600, modelPx = 6 }
 local function Get(key)
 	local v = ns.DB()[key]
 	if v == nil then return ns.modelDefaults[key] end
@@ -63,11 +69,12 @@ local function Palette(map)
 	if p ~= nil then return p or nil end
 	local s = ns.ModelFiles and ns.ModelFiles[map]
 	if not s then palettes[map] = false return nil end
-	p = { n = #s / 15, fdid = {}, wmo = {}, radius = {}, bottom = {}, top = {}, size = {}, mid = {} }
+	p = { n = #s / 15, fdid = {}, wmo = {}, cave = {}, radius = {}, bottom = {}, top = {}, size = {}, mid = {} }
 	for i = 0, p.n - 1 do
 		local q = i * 15 + 1
 		local r, lo, hi = Num(s, q + 6, 3) / 16, (Num(s, q + 9, 3) - OFF) / 16, (Num(s, q + 12, 3) - OFF) / 16
-		p.fdid[i], p.wmo[i], p.radius[i], p.bottom[i], p.top[i] = Num(s, q, 5), Num(s, q + 5, 1) == 1, r, lo, hi
+		local kind = Num(s, q + 5, 1) -- 0 prop or tree (M2), 1 building (WMO), 2 cave or mine (WMO)
+		p.fdid[i], p.wmo[i], p.cave[i], p.radius[i], p.bottom[i], p.top[i] = Num(s, q, 5), kind >= 1, kind == 2, r, lo, hi
 		p.size[i], p.mid[i] = max(r, (hi - lo) / 2), (lo + hi) / 2
 	end
 	palettes[map] = p
@@ -332,8 +339,10 @@ local function Select()
 		order[n] = n
 	end
 	if showB then
-		local w = WmoList(map)
-		for i = 1, w.n do Consider(w, i, true, R + pal.radius[w.mi[i]] * w.sc[i]) end
+		local w, caves = WmoList(map), Get("caves")
+		for i = 1, w.n do
+			if caves or not pal.cave[w.mi[i]] then Consider(w, i, true, R + pal.radius[w.mi[i]] * w.sc[i]) end
+		end
 	end
 	if wantP then
 		for ty = floor(-(cam.y + R) / TILE), floor(-(cam.y - R) / TILE) do
@@ -516,8 +525,8 @@ end
 
 ns.ModelsState = function()
 	local db = ns.DB()
-	return ("models: buildings %s; props and trees %s (at most %d); distance %d yd, smallest %d px; %d shown (%d buildings), %d loading, %d failed, %d actors%s"):format(
-		WmoWords(), PropsWanted() and "on" or "off", Get("modelCount"), Get("modelRange"), Get("modelPx"), M.shown, M.shownWmo, M.loading, M.failed, #M.pool,
+	return ("models: buildings %s, caves and mines %s; props and trees %s (at most %d); distance %d yd, smallest %d px; %d shown (%d buildings), %d loading, %d failed, %d actors%s"):format(
+		WmoWords(), Get("caves") and "on" or "off", PropsWanted() and "on" or "off", Get("modelCount"), Get("modelRange"), Get("modelPx"), M.shown, M.shownWmo, M.loading, M.failed, #M.pool,
 		((db.modelTurn or 0) ~= 0 or (db.modelTilt or "normal") ~= "normal") and (", turned %s degrees, tilt %s"):format(tostring(db.modelTurn or 0), db.modelTilt or "normal") or "")
 end
 
@@ -532,14 +541,15 @@ end
 local probes = {}
 ns.ModelsSelfTest = function(Report)
 	local t0 = debugprofilestop()
-	local maps, nTile, nPlace, nModels = 0, 0, 0, 0
+	local maps, nTile, nPlace, nModels, nCaves = 0, 0, 0, 0, 0
 	for map, m in pairs(ns.Models or {}) do
 		maps = maps + 1
 		local p = Palette(map)
 		nModels = nModels + (p and p.n or 0)
+		for i = 0, (p and p.n or 0) - 1 do if p.cave[i] then nCaves = nCaves + 1 end end
 		for _, s in pairs(m) do nTile = nTile + 1; nPlace = nPlace + Num(s, 3, 3) end
 	end
-	Report("models data: %d maps, %d tiles, %d placements of %d models (counted in %.0f ms)", maps, nTile, nPlace, nModels, debugprofilestop() - t0)
+	Report("models data: %d maps, %d tiles, %d placements of %d models (%d of them caves and mines) (counted in %.0f ms)", maps, nTile, nPlace, nModels, nCaves, debugprofilestop() - t0)
 	Report("%s", ns.ModelsState())
 	-- probes: the biggest building and the biggest prop near the middle of the view (else the Elwynn
 	-- farmhouse and an Elwynn tree), at the middle of the view
@@ -646,6 +656,7 @@ end
 -- /gps3d models                       what is shown (and the settings)
 -- /gps3d models buildings game|simple the game's buildings close up, or the simplified shapes
 -- /gps3d models props on|off          props and trees
+-- /gps3d models caves on|off          caves and mines among the game's buildings (on by default)
 -- /gps3d models count <n>             props and trees at most
 -- /gps3d models range <yd>            how far from the middle of the view
 -- /gps3d models px <n>                smallest model on screen
@@ -662,6 +673,7 @@ SlashCmdList.GPS3D = function(msg)
 	local n = tonumber(arg)
 	if what == "buildings" and (arg == "game" or arg == "simple") then Set("buildingModels", arg)
 	elseif what == "props" and (arg == "on" or arg == "off") then Set("props", arg == "on")
+	elseif what == "caves" and (arg == "on" or arg == "off") then Set("caves", arg == "on")
 	elseif what == "count" and n then Set("modelCount", max(0, floor(n)))
 	elseif what == "range" and n then Set("modelRange", max(50, floor(n)))
 	elseif what == "px" and n then Set("modelPx", max(1, n))

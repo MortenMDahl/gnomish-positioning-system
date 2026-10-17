@@ -104,7 +104,7 @@ def placements(mid):
             fd, kind, r, lo, hi = M[mi]
             size = max(r, (hi - lo) / 2) * s
             if size <= 0: continue
-            yield {'tile': (tx, ty), 'fdid': fd, 'wmo': kind == 1, 'x': x, 'y': y, 'h': h, 'yaw': yaw, 'pitch': pitch, 'roll': roll, 's': s,
+            yield {'tile': (tx, ty), 'fdid': fd, 'wmo': kind >= 1, 'cave': kind == 2, 'x': x, 'y': y, 'h': h, 'yaw': yaw, 'pitch': pitch, 'roll': roll, 's': s,
                    'size': size, 'cz': h + (lo + hi) / 2 * s, 'r': r * s}
 MAP0 = list(placements(0))
 BY_TILE = {}
@@ -318,6 +318,22 @@ check('Buildings off: no building models either (props stay)', wmo_on > 0 and no
 ns.SetDetail(True); g.tick(10)
 G.GPS3D_DB.modelRange = None; ns.ModelsChanged(); g.tick(5)
 R = int(ns.ModelSetting('modelRange'))
+
+# ---- caves and mines (kind 2): buildings like the others; /gps3d models caves off leaves them out ----
+n_caves = sum(1 for mid in DATA['maps'] for p in placements(int(mid)) if p['cave'])
+g.free_view(34.2183 * TILE, -47.769 * TILE, 300); g.tick(15)
+caves_on = [find(a)['fdid'] for a in g.actors() if find(a) and find(a)['cave']]
+G.SlashCmdList.GPS3D('models caves off'); g.tick(15)
+caves_off = [a for a in g.actors() if find(a) and find(a)['cave']]
+others_off = sum(1 for a in g.actors() if find(a) and find(a)['wmo'])
+state_off = 'caves and mines off' in g.chat()
+G.SlashCmdList.GPS3D('models caves on'); g.tick(15)
+caves_back = [a for a in g.actors() if find(a) and find(a)['cave']]
+check('caves and mines: in the data (kind 2), shown as the game\'s buildings (the cave east of Northshire); "/gps3d models caves off" leaves them out, on brings them back',
+      n_caves > 300 and 110497 in caves_on and not caves_off and state_off and caves_back and G.GPS3D_DB.caves == True,
+      f'{n_caves} cave placements; shown {caves_on}; off {len(caves_off)} (other buildings {others_off}); back {len(caves_back)}')
+G.GPS3D_DB.caves = None; ns.ModelsChanged()
+g.free_view(GX, GY, 300); g.tick(10)
 
 # ---- M6: the building check, the game refusing WMOs ----
 g2 = Game(wmo=False)

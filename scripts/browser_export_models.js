@@ -7,7 +7,7 @@
 // (or run it outside the browser with scripts/export_models_node.ts, which gives it the same worker calls).
 // Then: python scripts/build_models.py path/to/gps-models.json prototypes/GPS3D/Data
 //
-// Output, per map: models [[fileDataID, kind (0 M2, 1 WMO), radius, bottom, top], ...] (model units:
+// Output, per map: models [[fileDataID, kind (0 M2, 1 WMO, 2 WMO that is a cave or mine), radius, bottom, top], ...] (model units:
 // radius = furthest vertex from the model's origin across the ground, bottom/top = lowest and highest
 // vertex; 0, 0, 0 when the model could not be read) and tiles { "tx_ty": [[model index, x, y, h, yaw,
 // pitch, roll, scale], ...] } in GPS3D's world coordinates (x east, y north, h up, yards; x = gx * TILE,
@@ -15,9 +15,8 @@
 // model's own y) and roll (about its own x), radians, applied in that order (R = Rz(yaw) Ry(pitch)
 // Rx(roll)): the ModelScene actor's SetYaw / SetPitch / SetRoll. A placement is listed once, under the
 // tile its origin is on (the game lists a big one under every tile it touches). Underground WMOs (caves
-// and mines, see browser_underground.js) are left out unless keepUnderground: true: drawn over the 3D
-// view's ground they would show their rock and tunnels where the ground is; models no placement uses
-// any more are left out of the list too.
+// and mines, see browser_underground.js) get kind 2 instead of 1 (their own model entries, the same file),
+// so GPS3D can tell them apart (keepUnderground: true leaves them kind 1).
 //
 // MapExplorer's placement matrix maps model space (z up) to its world (x east, y up, z south):
 // T(pos) RotY(ry - 90) RotZ(-rx) RotX(rz - 90) S(scale). In GPS3D's axes (x east, y north, z up) the
@@ -133,16 +132,19 @@ window.gpsModels = (() => {
 					state.progress = `${state.done}/${state.total} tiles, map ${job.id}: ${n} placements, ${models.length} models, ${Math.round((performance.now() - t0) / 1000)} s`;
 				}
 				await measure(models);
-				// underground WMOs out, then the models nothing uses any more
-				const drop = new Set();
+				// caves and mines: their placements point at a model entry of kind 2 (the same file), then the
+				// models nothing uses any more are dropped
+				let nCave = 0;
 				if (!keepUnderground) {
+					const caveOf = new Map(); // model index -> its cave entry
 					for (const [row, M, key] of wmoRows) {
-						if (await window.gpsUnderground.isUnderground(job.wdt, M, groups.get(key))) drop.add(row);
+						if (!(await window.gpsUnderground.isUnderground(job.wdt, M, groups.get(key)))) continue;
+						let ci = caveOf.get(row[0]);
+						if (ci === undefined) { ci = models.length; models.push({ fdid: models[row[0]].fdid, kind: 'wmo', cave: true }); caveOf.set(row[0], ci); }
+						row[0] = ci;
+						nCave++;
 					}
-					state.progress = `map ${job.id}: ${drop.size} underground WMOs left out`;
-				}
-				if (drop.size) {
-					for (const tk of Object.keys(out)) { out[tk] = out[tk].filter((r) => !drop.has(r)); if (!out[tk].length) delete out[tk]; }
+					state.progress = `map ${job.id}: ${nCave} caves and mines`;
 					const used = new Set(Object.values(out).flatMap((pl) => pl.map((r) => r[0])));
 					const remap = new Map();
 					models = models.filter((m, i) => used.has(i) && remap.set(i, remap.size));
@@ -150,10 +152,10 @@ window.gpsModels = (() => {
 				}
 				state.maps[job.id] = {
 					name: job.name,
-					models: models.map((m) => [m.fdid, m.kind === 'wmo' ? 1 : 0, ...sizes.get(`${m.kind}:${m.fdid}`)]),
+					models: models.map((m) => [m.fdid, m.cave ? 2 : m.kind === 'wmo' ? 1 : 0, ...sizes.get(`${m.kind}:${m.fdid}`)]),
 					tiles: out,
 				};
-				state.stats[job.id] = { placements: n - drop.size, wmos: nWmo - drop.size, m2s: n - nWmo, underground: drop.size, models: models.length, tiles: Object.keys(out).length };
+				state.stats[job.id] = { placements: n, wmos: nWmo, m2s: n - nWmo, caves: nCave, models: models.length, tiles: Object.keys(out).length };
 			}
 			state.progress = `done: ${state.total} tiles in ${Math.round((performance.now() - t0) / 1000)} s, worst matrix error ${state.worstError.toExponential(2)}, ${state.errors.length} errors`;
 		} finally { state.running = false; }
