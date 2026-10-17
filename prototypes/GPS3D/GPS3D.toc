@@ -2,6 +2,7 @@
 ## Title: GPS 3D
 ## Notes: The 3D view for Gnomish Positioning System: the whole world in perspective, buildings included, with you on it. /gps3d
 ## Version: 0.5.0
+## X-License: MIT
 ## Dependencies: GnomishPositioningSystem
 ## SavedVariables: GPS3D_DB
 

@@ -3,6 +3,7 @@
 ## Notes: A zoomable top-down map of the real world, built from the game's own minimap images, with Blizzard's map as a third mode. /gps
 ## Author: Morten
 ## Version: 0.4.0
+## X-License: MIT
 ## SavedVariables: GnomishPositioningSystemDB, GnomishPositioningSystemLog
 
 Data\MapTiles.lua
