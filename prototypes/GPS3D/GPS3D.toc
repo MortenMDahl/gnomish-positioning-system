@@ -28,7 +28,6 @@ Data\Detail_0_4.lua
 Data\Detail_1_1.lua
 Data\Detail_1_2.lua
 Data\Detail_1_3.lua
-Data\Detail_1_4.lua
 Data\Detail_30.lua
 Data\Detail_33.lua
 Data\Detail_36.lua

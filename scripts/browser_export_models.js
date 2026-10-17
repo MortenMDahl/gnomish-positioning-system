@@ -1,6 +1,7 @@
 // The game's own models for GPS3D: where every building (WMO) and prop or tree (M2 doodad) stands on
 // every map with terrain, from the tiles' _obj0 files, and how big each model is.
-// Run in the MapExplorer page after scripts/browser_export.js has hooked the worker (window.__gps.call):
+// Run in the MapExplorer page after scripts/browser_export.js has hooked the worker (window.__gps.call)
+// and scripts/browser_underground.js is loaded:
 //   gpsModels.start({ maps: [0, 1] })  -> runs in the background; gpsModels.progress shows where it is
 //   gpsModels.download()               -> gps-models.json
 // (or run it outside the browser with scripts/export_models_node.ts, which gives it the same worker calls).
@@ -13,7 +14,10 @@
 // y = -gy * TILE) with the rotation as yaw (about up, from east toward north), pitch (about the
 // model's own y) and roll (about its own x), radians, applied in that order (R = Rz(yaw) Ry(pitch)
 // Rx(roll)): the ModelScene actor's SetYaw / SetPitch / SetRoll. A placement is listed once, under the
-// tile its origin is on (the game lists a big one under every tile it touches).
+// tile its origin is on (the game lists a big one under every tile it touches). Underground WMOs (caves
+// and mines, see browser_underground.js) are left out unless keepUnderground: true: drawn over the 3D
+// view's ground they would show their rock and tunnels where the ground is; models no placement uses
+// any more are left out of the list too.
 //
 // MapExplorer's placement matrix maps model space (z up) to its world (x east, y up, z south):
 // T(pos) RotY(ry - 90) RotZ(-rx) RotX(rz - 90) S(scale). In GPS3D's axes (x east, y north, z up) the
@@ -53,6 +57,7 @@ window.gpsModels = (() => {
 
 	const state = { running: false, progress: '', done: 0, total: 0, maps: {}, stats: {}, errors: [], worstError: 0 };
 	const sizes = new Map(); // `${kind}:${fdid}` -> [radius, bottom, top]
+	const groups = new Map(); // `wmo:${fdid}` -> its groups' boxes (browser_underground.js)
 
 	async function measure(list) {
 		const todo = list.filter((m) => !sizes.has(`${m.kind}:${m.fdid}`));
@@ -73,13 +78,14 @@ window.gpsModels = (() => {
 					}
 					r = Math.sqrt(r);
 				} else if (!d) state.errors.push(`model ${m.kind} ${m.fdid}: not readable`);
+				if (m.kind === 'wmo') groups.set(`${m.kind}:${m.fdid}`, window.gpsUnderground.groups(d));
 				sizes.set(`${m.kind}:${m.fdid}`, [r2(r), r2(lo), r2(hi)]);
 			});
 			state.progress = `${state.mapLabel}: measuring models ${Math.min(i + 8, todo.length)}/${todo.length}`;
 		}
 	}
 
-	async function start({ maps = null, check = true } = {}) {
+	async function start({ maps = null, check = true, keepUnderground = false } = {}) {
 		if (state.running) return 'already running';
 		Object.assign(state, { running: true, maps: {}, stats: {}, errors: [], done: 0, total: 0, worstError: 0 });
 		const t0 = performance.now();
@@ -95,7 +101,9 @@ window.gpsModels = (() => {
 			state.total = jobs.reduce((n, j) => n + j.tiles.length, 0);
 			for (const job of jobs) {
 				state.mapLabel = `map ${job.id}`;
-				const seen = new Set(), index = new Map(), models = [], out = {};
+				const seen = new Set(), index = new Map(), out = {};
+				let models = [];
+				const wmoRows = []; // [placement row, matrix, model key]
 				let n = 0, nWmo = 0;
 				for (const t of job.tiles) {
 					let objs = [];
@@ -116,19 +124,36 @@ window.gpsModels = (() => {
 						}
 						const tx = Math.floor(p[0] / TILE), ty = Math.floor(-p[1] / TILE);
 						const tk = `${tx}_${ty}`;
-						(out[tk] = out[tk] || []).push([mi, r2(p[0]), r2(p[1]), r2(p[2]), r4(p[3]), r4(p[4]), r4(p[5]), r4(p[6])]);
+						const row = [mi, r2(p[0]), r2(p[1]), r2(p[2]), r4(p[3]), r4(p[4]), r4(p[5]), r4(p[6])];
+						(out[tk] = out[tk] || []).push(row);
+						if (o.kind === 'wmo') wmoRows.push([row, o.matrix, key]);
 						n++; if (o.kind === 'wmo') nWmo++;
 					}
 					state.done++;
 					state.progress = `${state.done}/${state.total} tiles, map ${job.id}: ${n} placements, ${models.length} models, ${Math.round((performance.now() - t0) / 1000)} s`;
 				}
 				await measure(models);
+				// underground WMOs out, then the models nothing uses any more
+				const drop = new Set();
+				if (!keepUnderground) {
+					for (const [row, M, key] of wmoRows) {
+						if (await window.gpsUnderground.isUnderground(job.wdt, M, groups.get(key))) drop.add(row);
+					}
+					state.progress = `map ${job.id}: ${drop.size} underground WMOs left out`;
+				}
+				if (drop.size) {
+					for (const tk of Object.keys(out)) { out[tk] = out[tk].filter((r) => !drop.has(r)); if (!out[tk].length) delete out[tk]; }
+					const used = new Set(Object.values(out).flatMap((pl) => pl.map((r) => r[0])));
+					const remap = new Map();
+					models = models.filter((m, i) => used.has(i) && remap.set(i, remap.size));
+					for (const pl of Object.values(out)) for (const r of pl) r[0] = remap.get(r[0]);
+				}
 				state.maps[job.id] = {
 					name: job.name,
 					models: models.map((m) => [m.fdid, m.kind === 'wmo' ? 1 : 0, ...sizes.get(`${m.kind}:${m.fdid}`)]),
 					tiles: out,
 				};
-				state.stats[job.id] = { placements: n, wmos: nWmo, m2s: n - nWmo, models: models.length, tiles: Object.keys(out).length };
+				state.stats[job.id] = { placements: n - drop.size, wmos: nWmo - drop.size, m2s: n - nWmo, underground: drop.size, models: models.length, tiles: Object.keys(out).length };
 			}
 			state.progress = `done: ${state.total} tiles in ${Math.round((performance.now() - t0) / 1000)} s, worst matrix error ${state.worstError.toExponential(2)}, ${state.errors.length} errors`;
 		} finally { state.running = false; }

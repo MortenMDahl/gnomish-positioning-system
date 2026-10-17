@@ -50,6 +50,8 @@ class Game:
         for addon, files in [('GnomishPositioningSystem', GPS_FILES), ('GPS3D', files3d)]:
             for f in files:
                 if not with_models and f.startswith('Data/Models_'): continue
+                # (the saved TOC lists Detail_1_4.lua, which the build no longer makes since caves are left out)
+                if before and f.startswith('Data/Detail_') and not os.path.exists(f'{SITE}/addons/{addon}/{f}'): continue
                 src = open(os.path.join(OLD, 'GPS3D.lua') if before and f == 'GPS3D.lua' else f'{SITE}/addons/{addon}/{f}').read()
                 if patch and f == 'Models.lua':
                     old, new = patch

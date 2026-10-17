@@ -29,7 +29,7 @@ The 3D view then draws exactly what it drew before. No models are chosen, and no
 
 ## Way 2: put the old files back
 
-1. Copy `GPS3D.lua` and `GPS3D.toc` from this folder over `prototypes/GPS3D/GPS3D.lua` and `prototypes/GPS3D/GPS3D.toc`.
+1. Copy `GPS3D.lua` and `GPS3D.toc` from this folder over `prototypes/GPS3D/GPS3D.lua` and `prototypes/GPS3D/GPS3D.toc`. Then delete the line `Data\Detail_1_4.lua` from that TOC: since caves and mines are left out of the building meshes (later on 2026-10-17), map 1's meshes fit in three files and that fourth one is gone.
 2. Delete `prototypes/GPS3D/Models.lua` and `prototypes/GPS3D/Data/Models_*.lua`. Because the old TOC no longer lists them, leaving them in place does no harm, but they would still be copied into the game folder.
 3. Copy the GPS3D folder into the game's AddOns folder again and `/reload`.
 

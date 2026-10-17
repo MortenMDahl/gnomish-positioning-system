@@ -28,10 +28,11 @@ const api: Record<string, (...a: any[]) => Promise<any>> = {
 	loadInstance: (id: number) => world.loadInstance(id),
 	loadTileObjects: async (wdt: number, x: number, y: number) => (await world.loadTileObjects(wdt, x, y)).map((p) => ({ ...p, matrix: Array.from(p.matrix) })),
 	loadModels: (list: any[]) => world.loadModels(list),
+	loadNearTile: (wdt: number, x: number, y: number, compressed?: boolean) => world.loadNearTile(wdt, x, y, !!compressed),
 };
 const quiet = console.warn; console.warn = () => {}; // MapExplorer warns about every model it can't read; the export counts them
 (globalThis as any).window = { __gps: { call: (method: string, ...args: any[]) => api[method](...args) } };
-new Function(readFileSync(join(repo, 'scripts/browser_export_models.js'), 'utf8'))();
+for (const f of ['scripts/browser_underground.js', 'scripts/browser_export_models.js']) new Function(readFileSync(join(repo, f), 'utf8'))();
 const gm = (globalThis as any).window.gpsModels;
 const timer = setInterval(() => console.log(gm.progress), 10000);
 console.log(await gm.start({ maps }));

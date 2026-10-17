@@ -1,6 +1,7 @@
 // Detailed meshes (buildings raised into the ground) for GPS3D, for every tile of the world that has
 // buildings (WMOs), from MapExplorer's storage worker.
-// Run in the MapExplorer page after scripts/browser_export.js has hooked the worker (window.__gps.call):
+// Run in the MapExplorer page after scripts/browser_export.js has hooked the worker (window.__gps.call)
+// and scripts/browser_underground.js is loaded (or outside the browser: scripts/export_detail_node.ts):
 //   gpsDetail.start({ maps: [0] })    -> runs in the background; gpsDetail.progress shows where it is
 //   gpsDetail.download()              -> gps-detail.json (three strings per tile: tiles, low, far; see below)
 //   await gpsDetail.tile(0, 32, 48)   -> one tile, with statistics (for trying settings)
@@ -15,6 +16,9 @@
 // away from buildings only needs to be about as good as the 3D view's 16.7-yard grid.
 // Each block is meshed three times: fine (every sample), coarse (every 4th sample, coarseError) and far
 // (every 8th, farError).
+// Underground WMOs (caves and mines: their rooms and rock shell lie in the ground, see
+// browser_underground.js) are left out, keepUnderground: true keeps them: the parts of their rock and
+// tunnels that reach above the ground would otherwise raise it by the cave's height.
 // Tiles where no building rises more than 1.5 yards above the ground over at least minRaised samples,
 // and blocks with fewer than minBlock such samples, are left out (the 3D view's grid covers them).
 //
@@ -36,7 +40,8 @@ window.gpsDetail = (() => {
 	function orient(ax, ay, bx, by, cx, cy) { return (bx - cx) * (ay - cy) - (by - cy) * (ax - cx); }
 	// delatin, with the error at each sample scaled by WEIGHT (tight near buildings, loose elsewhere)
 	async function weightedDelatin() {
-		const D = (await import('https://cdn.jsdelivr.net/npm/delatin@0.2.0/+esm')).default;
+		// (export_detail_node.ts hands over the same delatin 0.2.0 from npm)
+		const D = window.__gps.Delatin || (await import('https://cdn.jsdelivr.net/npm/delatin@0.2.0/+esm')).default;
 		class W extends D {}
 		W.prototype._findCandidate = function (p0x, p0y, p1x, p1y, p2x, p2y, t) {
 			const minX = Math.min(p0x, p1x, p2x), minY = Math.min(p0y, p1y, p2y);
@@ -77,6 +82,12 @@ window.gpsDetail = (() => {
 	const models = new Map(); let modelBytes = 0;
 	const MODEL_BUDGET = 900e6;
 	const colours = new Map();
+	const below = new Map(); // `${wdt}_${uid}` -> underground (a WMO is on every tile it touches)
+	async function underground(wdt, o, m) {
+		const k = `${wdt}_${o.uid}`;
+		if (!below.has(k)) below.set(k, await window.gpsUnderground.isUnderground(wdt, o.matrix, m.groups));
+		return below.get(k);
+	}
 
 	async function model(fdid) {
 		if (models.has(fdid)) { const m = models.get(fdid); models.delete(fdid); models.set(fdid, m); return m; }
@@ -87,6 +98,7 @@ window.gpsDetail = (() => {
 				positions: m.positions, indices: m.indices,
 				batches: (m.batches || []).filter((b) => (b.material?.blend ?? 0) <= 1).map((b) => ({ start: b.start, count: b.count, tex: b.material?.texture ?? 0 })),
 				liquids: (m.liquids || []).map((l) => ({ positions: l.positions, indices: l.indices })),
+				groups: window.gpsUnderground.groups(m),
 			};
 			keep.bytes = m.positions.byteLength + m.indices.byteLength;
 		}
@@ -157,7 +169,7 @@ window.gpsDetail = (() => {
 		}
 	}
 
-	async function tile(map, tx, ty, { maxError = 1, groundError = 4, coarseError = 2, farError = 3, wallSlope = 0.2, near = 4, minRaised = 40, minBlock = 16, wdt = null, objects = null } = {}) {
+	async function tile(map, tx, ty, { maxError = 1, groundError = 4, coarseError = 2, farError = 3, wallSlope = 0.2, near = 4, minRaised = 40, minBlock = 16, keepUnderground = false, wdt = null, objects = null } = {}) {
 		const T0 = performance.now();
 		if (!Delatin) Delatin = await weightedDelatin();
 		if (!wdt) wdt = (await call('loadInstance', map)).wdt;
@@ -167,6 +179,7 @@ window.gpsDetail = (() => {
 		if (!wmos.length) return { key: `${map}_${tx}_${ty}`, skipped: 'no WMO' };
 		const nt = await call('loadNearTile', wdt, tx, ty);
 		const h = nt.heights, sea = nt.sea;
+		window.gpsUnderground.remember(wdt, tx, ty, h);
 		const water = new Float32Array(V * V).fill(-Infinity);
 		for (const lq of nt.liquids || []) {
 			const P = lq.positions;
@@ -197,10 +210,12 @@ window.gpsDetail = (() => {
 		const texIds = [0];
 		const texIndex = new Map();
 		let wmoTris = 0;
+		const under = [];
 		const TL = performance.now();
 		for (const o of wmos) {
 			const m = await model(o.fdid);
 			if (!m) continue;
+			if (!keepUnderground && await underground(wdt, o, m)) { under.push(o.uid); continue; }
 			const M = o.matrix, P = m.positions, n = P.length / 3;
 			const L = new Float32Array(n * 3); // raster x, raster z, height
 			let inside = false;
@@ -251,7 +266,7 @@ window.gpsDetail = (() => {
 		let raised = 0;
 		for (let k = 0; k < S * S; k++) if (src[k] && H[k] - base[k] > 1.5) raised++;
 		const key = `${map}_${tx}_${ty}`;
-		if (raised < minRaised) return { key, skipped: 'nothing raised', raised, wmos: wmos.length };
+		if (raised < minRaised) return { key, skipped: 'nothing raised', raised, wmos: wmos.length, underground: under };
 		const TD = performance.now();
 		// allowed error: maxError within `near` samples of a building (raised WMO or wall), groundError elsewhere
 		const mark = new Uint8Array(S * S);
@@ -358,33 +373,34 @@ window.gpsDetail = (() => {
 			nvAll += fine.nv; ntAll += fine.nt; ntLow += coarse.nt; ntFar += far.nt;
 		}
 		const TE = performance.now();
-		if (!blocks.length) return { key, skipped: 'no block with buildings', raised, wmos: wmos.length };
+		if (!blocks.length) return { key, skipped: 'no block with buildings', raised, wmos: wmos.length, underground: under };
 		const str = 'D2' + enc(blocks.length, 2) + blocks.join('');
 		const low = 'D2' + enc(lows.length, 2) + lows.join('');
 		const farStr = 'D2' + enc(fars.length, 2) + fars.join('');
 		return {
-			key, str, low, far: farStr, blocks: blocks.length, nv: nvAll, ntri: ntAll, ntriLow: ntLow, ntriFar: ntFar, maxBlockTris: Math.max(...blockStats), raised, wmos: wmos.length, wmoTris, bytes: str.length, bytesLow: low.length,
+			key, str, low, far: farStr, blocks: blocks.length, nv: nvAll, ntri: ntAll, ntriLow: ntLow, ntriFar: ntFar, maxBlockTris: Math.max(...blockStats), raised, wmos: wmos.length, underground: under, wmoTris, bytes: str.length, bytesLow: low.length,
 			ms: { load: Math.round(TL - T0), raster: Math.round(TD - TL), mesh: Math.round(TE - TD), total: Math.round(performance.now() - T0) },
 		};
 	}
 
-	const state = { running: false, progress: '', done: 0, total: 0, tiles: {}, low: {}, far: {}, stats: [], errors: [] };
-	async function start({ maps = null, maxError = 1, groundError = 4, minRaised = 40 } = {}) {
+	const state = { running: false, progress: '', done: 0, total: 0, tiles: {}, low: {}, far: {}, stats: [], errors: [], underground: {} };
+	async function start({ maps = null, maxError = 1, groundError = 4, minRaised = 40, keepUnderground = false, only = null } = {}) {
 		if (state.running) return 'already running';
-		state.running = true; state.tiles = {}; state.low = {}; state.far = {}; state.stats = []; state.errors = []; state.done = 0;
+		state.running = true; state.tiles = {}; state.low = {}; state.far = {}; state.stats = []; state.errors = []; state.underground = {}; state.done = 0;
 		try {
 			const list = [];
 			for (const m of await call('listMaps')) {
 				if (maps && !maps.includes(m.id)) continue;
 				const inst = await call('loadInstance', m.id).catch(() => null);
 				if (!inst || !inst.wdt) continue;
-				for (const ft of (inst.farTiles || []).filter((t) => t.hasAdt)) list.push([m.id, inst.wdt, ft.x, ft.y]);
+				for (const ft of (inst.farTiles || []).filter((t) => t.hasAdt)) if (!only || only.includes(`${m.id}_${ft.x}_${ft.y}`)) list.push([m.id, inst.wdt, ft.x, ft.y]);
 			}
 			state.total = list.length;
 			const t0 = performance.now();
 			for (const [map, wdt, x, y] of list) {
 				try {
-					const r = await tile(map, x, y, { maxError, groundError, minRaised, wdt });
+					const r = await tile(map, x, y, { maxError, groundError, minRaised, keepUnderground, wdt });
+					if (r.underground && r.underground.length) state.underground[r.key] = r.underground;
 					if (r.str) { state.tiles[r.key] = r.str; state.low[r.key] = r.low; state.far[r.key] = r.far; const { str, low, far, ...rest } = r; state.stats.push(rest); }
 				} catch (e) { state.errors.push(`${map}_${x}_${y}: ${e && e.message || e}`); }
 				state.done++;
@@ -394,13 +410,17 @@ window.gpsDetail = (() => {
 		} finally { state.running = false; }
 		return state.progress;
 	}
+	// tiles: every tile exported (only: those keys), underground: per tile, the underground WMOs left out (uids)
+	function result() {
+		return { exportedAt: new Date().toISOString(), format: 'D2, see scripts/browser_export_detail.js', tiles: state.tiles, low: state.low, far: state.far, stats: state.stats, errors: state.errors, underground: state.underground };
+	}
 	function download(name = 'gps-detail.json') {
-		const data = { exportedAt: new Date().toISOString(), format: 'D2, see scripts/browser_export_detail.js', tiles: state.tiles, low: state.low, far: state.far, stats: state.stats, errors: state.errors };
+		const data = result();
 		const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
 		const a = document.createElement('a');
 		a.download = name; a.href = URL.createObjectURL(blob);
 		document.body.append(a); a.click(); a.remove();
 		return { tiles: Object.keys(state.tiles).length, bytes: blob.size };
 	}
-	return { tile, start, download, state, get progress() { return state.progress; } };
+	return { tile, start, download, result, state, get progress() { return state.progress; } };
 })();
