@@ -102,8 +102,14 @@ check('no position: says so', not pl.on and 'not available' in str(ns2.ui.footer
 place(-9464, 62, 0); tick(10)
 gh = ns2.GroundHeight(pl.x, pl.y, 0)
 check('ground height at Goldshire is plausible (40..80 yd)', 40 < gh < 80, f'{gh:.1f}')
-# caves and mines (underground WMOs, scripts/browser_underground.js) leave the ground as it is; buildings standing
-# over underground rooms (the ruins over the Undercity) still raise it
+# caves and mines (underground WMOs, scripts/browser_underground.js) keep their exterior groups (the rock
+# around the entrance) and with them the building mesh's fine ground there; their tunnels and rooms are
+# left out by the export (checked against the game files there). The ruins over the Undercity still stand.
+def block_at(gx, gy):
+    tx, ty = int(gx), int(gy)
+    tb = ns2.TileBlocks(0, tx, ty)
+    bi = int((gy - ty) * 8) * 8 + int((gx - tx) * 8)
+    return tb is not None and tb[bi] is not None
 def raised(gx, gy, r):
     cx, cy, n, up, worst = gx * TILE, -gy * TILE, 0, 0, 0.0
     for i in range(-r, r + 1, 3):
@@ -112,12 +118,13 @@ def raised(gx, gy, r):
             g0, b0 = ns2.GridHeight(0, cx + i, cy + j), ns2.GroundHeight(cx + i, cy + j, 0)
             if g0 is None or b0 is None: continue
             n += 1
-            if b0 - g0 > 3: up += 1; worst = max(worst, b0 - g0)
+            if abs(b0 - g0) > 3: up += 1; worst = max(worst, abs(b0 - g0))
     return n, up, worst
-caves = [raised(34.2183, 47.7690, 45), raised(32.2470, 48.2117, 45), raised(33.1145, 49.1650, 45)]
+sites = [(34.2183, 47.7690), (32.2470, 48.2117), (33.1145, 49.1650)]
+caves = [(block_at(gx, gy), raised(gx, gy, 45)) for gx, gy in sites]
 ruins = raised(31.55, 28.91, 120)
-check('caves and mines leave the ground as it is (the cave east of Northshire and two mines in Elwynn Forest); the ruins over the Undercity still stand',
-      all(n > 600 and up == 0 for n, up, _ in caves) and ruins[1] > 1000, f'raised > 3 yd: {[c[1] for c in caves]} of {[c[0] for c in caves]} points; Undercity {ruins[1]} of {ruins[0]}, up to {ruins[2]:.0f} yd')
+check('caves and mines keep their outside rock and the fine ground around them (the cave east of Northshire and two mines in Elwynn Forest have building blocks); the ruins over the Undercity still stand',
+      all(has and r[1] > 100 for has, r in caves) and ruins[1] > 1000, f'blocks {[c[0] for c in caves]}, points off the 16.7-yd grid by > 3 yd {[c[1][1] for c in caves]} of {[c[1][0] for c in caves]}; Undercity {ruins[1]} of {ruins[0]}, up to {ruins[2]:.0f} yd')
 # seams: neighbouring tiles with different steps share edge heights
 L.execute('''
 function SEAMCHECK()

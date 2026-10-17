@@ -2,8 +2,8 @@
 
 Usage: python scripts/merge_detail.py data/detail_0.json new.json [--all] [--out merged.json]
 
-By default only the tiles where the new export left underground WMOs out (its "underground" list, see
-scripts/browser_underground.js) are taken from it: replaced when the tile still has buildings, removed
+By default only the tiles where the new export drew caves and mines differently (its "underground" and
+"undergroundWhole" lists, see scripts/browser_underground.js) are taken from it: replaced when the tile still has buildings, removed
 when it no longer has any. Every other tile keeps its old strings, so a merge changes nothing but the
 caves. --all takes every tile the new export visited. Writes the result over the old file unless --out
 is given, and prints what changed.
@@ -22,7 +22,7 @@ def main(argv):
         del argv[i:i + 2]
     old_path, new_path = argv
     old, new = json.load(open(old_path)), json.load(open(new_path))
-    keys = set(new.get('visited') or new['tiles']) if take_all else set(new.get('underground', {}))
+    keys = set(new.get('visited') or new['tiles']) if take_all else set(new.get('underground', {})) | set(new.get('undergroundWhole', {}))
     # only tiles of the maps the old file holds
     maps = {k.split('_')[0] for k in old['tiles']}
     keys = {k for k in keys if k.split('_')[0] in maps}
@@ -48,10 +48,13 @@ def main(argv):
     old['stats'] = [stats[k] for k in order]
     old.setdefault('merges', []).append({'from': new.get('exportedAt'), 'build': new.get('build'), 'tiles': len(keys), 'replaced': replaced, 'removed': removed, 'added': added, 'all': take_all})
     if not take_all:
-        und = old.setdefault('underground', {})
-        for k in keys:
-            if k in new.get('underground', {}):
-                und[k] = new['underground'][k]
+        for field in ('underground', 'undergroundWhole'):
+            und = old.setdefault(field, {})
+            for k in keys:
+                if k in new.get(field, {}):
+                    und[k] = new[field][k]
+                else:
+                    und.pop(k, None)
     assert set(old['tiles']) == set(old['low']) == set(old['far']) == set(stats), 'tiles, low, far and stats disagree'
     json.dump(old, open(out or old_path, 'w'))
     print(f'{old_path}: {len(keys)} tiles from {new_path}: {replaced} replaced, {removed} removed, {added} added; {len(old["tiles"])} tiles now')

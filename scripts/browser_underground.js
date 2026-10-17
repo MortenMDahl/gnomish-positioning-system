@@ -1,6 +1,7 @@
 // Which buildings (WMOs) are underground: caves and mines, whose rooms and rock lie in the ground. The
-// building exports (browser_export_detail.js, browser_export_models.js) leave them out, so the 3D view
-// keeps the ground there instead of raising it by the cave's rock and tunnels.
+// building meshes (browser_export_detail.js) keep only their exterior groups, the parts the game draws
+// outside, so their tunnels never raise the ground; the model placements (browser_export_models.js) leave
+// them out, since an actor would draw the whole WMO, tunnels included, over the ground.
 // Load it in the MapExplorer page before those scripts (after scripts/browser_export.js has hooked the
 // worker: window.__gps.call); scripts/export_detail_node.ts and export_models_node.ts load it themselves.
 //   await gpsUnderground.shares(wdt, matrix, groups) -> { rooms, shell }: shares below the ground (or null)

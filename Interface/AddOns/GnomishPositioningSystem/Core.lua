@@ -1162,10 +1162,16 @@ SlashCmdList.GPS = function(msg)
 	elseif cmd == "test" then
 		ns.SelfTest()
 	elseif cmd == "grid" then
+		-- The numbers are drawn on the 2D map only. Turning them on from another window switches that
+		-- window to the 2D map, looking at the same place (the mode you chose is kept); turning them off
+		-- never opens a window. Until 2026-10-18 both showed the 2D map over the 3D view.
 		ns.debugGrid = not ns.debugGrid
-		frame:Show()
-		ns.Layout()
-		print("|cff33ff99GPS|r: tile numbers " .. (ns.debugGrid and "on" or "off"))
+		local shown, m = ns.ShownMode()
+		if ns.debugGrid and shown ~= "2D" then
+			if shown then ns.OpenMode("2D", m.Frame(), m.focus and m.focus() or "you") else frame:Show() end
+		end
+		if frame:IsShown() then ns.Layout() end
+		print("|cff33ff99GPS|r: tile numbers " .. (ns.debugGrid and "on" or "off") .. (ns.debugGrid and shown and shown ~= "2D" and " (on the 2D map)" or ""))
 	elseif cmd == "swapaxes" or cmd == "flipfacing" then
 		local key = cmd == "swapaxes" and "swapAxes" or "flipFacing"
 		ns.db[key] = not ns.db[key]

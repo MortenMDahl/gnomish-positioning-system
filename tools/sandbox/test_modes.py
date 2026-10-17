@@ -29,6 +29,7 @@ def chat():
     if c:
         print('CHAT>', c.replace('\n', '\nCHAT> '))
         errors.extend(l for l in c.split('\n') if 'Lua error' in l or 'not simulated' in l)
+    return c or ''
 results = []
 def check(name, ok, detail=''):
     results.append((name, bool(ok))); print(('PASS' if ok else 'FAIL'), name, detail)
@@ -265,6 +266,20 @@ G.SANDBOX_SLASH('/gps test'); tick(90)
 out = G.SANDBOX_CHAT() or ''
 lines = [l for l in out.split('\n') if 'modes:' in l or 'traditional map:' in l]
 print('\n'.join(lines))
+# ---- /gps grid (tile numbers, drawn on the 2D map) from the 3D view: never two windows at once
+overworld(); G.GPS_Toggle() if not any(shown(x) for x in (F1, F2, F3)) else None; tick(3)
+ns1.OpenNamed('3D'); tick(5); mode_before = ns1.db.mode; chat()
+G.SlashCmdList.GPS('grid'); tick(5); out_on = chat()
+on_ok = only(F1) and ns1.debugGrid and ns1.db.mode == mode_before and 'tile numbers on (on the 2D map)' in out_on
+ns1.OpenNamed('3D'); tick(5)
+G.SlashCmdList.GPS('grid'); tick(5); chat()
+off_ok = only(F2) and not ns1.debugGrid
+G.SlashCmdList.GPS('grid'); tick(3); G.SlashCmdList.GPS('grid'); tick(3); chat()
+again_ok = only(F1) and not ns1.debugGrid
+check('/gps grid from the 3D view: on switches it to the 2D map (mode kept); off from the 3D view leaves only the 3D view; on and off again: one window',
+      on_ok and off_ok and again_ok, f'on {on_ok} off {off_ok} again {again_ok}; shown {[shown(x) for x in (F1, F2, F3)]}')
+ns1.OpenNamed(mode_before); tick(3)
+
 check('self-test reports the modes and the traditional map', any('modes: 2D, 3D, Map; opening here picks 2D map' in l for l in lines) and any('traditional map: your map 1429 (Elwynn Forest), 1 art layer(s), 27 data providers, controls at level' in l for l in lines))
 errors.extend(l for l in out.split('\n') if 'Lua error' in l)
 check('no Lua errors or unsimulated calls along the way', not errors, '; '.join(errors[:3]))

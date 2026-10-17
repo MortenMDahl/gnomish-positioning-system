@@ -1,7 +1,8 @@
 // Detailed meshes (buildings raised into the ground) for GPS3D, for every tile of the world that has
 // buildings (WMOs), from MapExplorer's storage worker.
 // Run in the MapExplorer page after scripts/browser_export.js has hooked the worker (window.__gps.call)
-// and scripts/browser_underground.js is loaded (or outside the browser: scripts/export_detail_node.ts):
+// and scripts/browser_underground.js and browser_wmo_groups.js are loaded (or outside the browser:
+// scripts/export_detail_node.ts):
 //   gpsDetail.start({ maps: [0] })    -> runs in the background; gpsDetail.progress shows where it is
 //   gpsDetail.download()              -> gps-detail.json (three strings per tile: tiles, low, far; see below)
 //   await gpsDetail.tile(0, 32, 48)   -> one tile, with statistics (for trying settings)
@@ -17,8 +18,10 @@
 // Each block is meshed three times: fine (every sample), coarse (every 4th sample, coarseError) and far
 // (every 8th, farError).
 // Underground WMOs (caves and mines: their rooms and rock shell lie in the ground, see
-// browser_underground.js) are left out, keepUnderground: true keeps them: the parts of their rock and
-// tunnels that reach above the ground would otherwise raise it by the cave's height.
+// browser_underground.js) keep only their exterior groups, the parts the game draws outside (the rock
+// around the entrance, the timber frame of a mine); their interior groups (tunnels and rooms) are left
+// out, so a tunnel near the surface never raises the ground. Where the groups cannot be told apart
+// (browser_wmo_groups.js returns null) the WMO is left out whole. keepUnderground: true keeps every group.
 // Tiles where no building rises more than 1.5 yards above the ground over at least minRaised samples,
 // and blocks with fewer than minBlock such samples, are left out (the 3D view's grid covers them).
 //
@@ -99,6 +102,7 @@ window.gpsDetail = (() => {
 				batches: (m.batches || []).filter((b) => (b.material?.blend ?? 0) <= 1).map((b) => ({ start: b.start, count: b.count, tex: b.material?.texture ?? 0 })),
 				liquids: (m.liquids || []).map((l) => ({ positions: l.positions, indices: l.indices })),
 				groups: window.gpsUnderground.groups(m),
+				inside: window.gpsWmoGroups.interiorVertices(m), // 1 per vertex of an interior group
 			};
 			keep.bytes = m.positions.byteLength + m.indices.byteLength;
 		}
@@ -210,12 +214,17 @@ window.gpsDetail = (() => {
 		const texIds = [0];
 		const texIndex = new Map();
 		let wmoTris = 0;
-		const under = [];
+		const under = [], whole = [];
 		const TL = performance.now();
 		for (const o of wmos) {
 			const m = await model(o.fdid);
 			if (!m) continue;
-			if (!keepUnderground && await underground(wdt, o, m)) { under.push(o.uid); continue; }
+			// caves and mines: only the parts outside (exterior groups)
+			const outsideOnly = !keepUnderground && await underground(wdt, o, m);
+			if (outsideOnly) {
+				if (!m.inside) { whole.push(o.uid); continue; }
+				under.push(o.uid);
+			}
 			const M = o.matrix, P = m.positions, n = P.length / 3;
 			const L = new Float32Array(n * 3); // raster x, raster z, height
 			let inside = false;
@@ -234,6 +243,7 @@ window.gpsDetail = (() => {
 				let col = texIndex.get(b.tex);
 				if (col === undefined) { col = texIds.length; texIds.push(b.tex); texIndex.set(b.tex, col); }
 				for (let t = b.start; t < b.start + b.count; t += 3) {
+					if (outsideOnly && m.inside[I[t]]) continue; // a tunnel or room of a cave (a triangle stays in its group)
 					const a = I[t] * 3, bb = I[t + 1] * 3, c = I[t + 2] * 3;
 					const ax = L[a], az = L[a + 1], ay = L[a + 2], bx = L[bb], bz = L[bb + 1], by = L[bb + 2], cx = L[c], cz = L[c + 1], cy = L[c + 2];
 					if (Math.max(ax, bx, cx) < 0 || Math.min(ax, bx, cx) > N || Math.max(az, bz, cz) < 0 || Math.min(az, bz, cz) > N) continue;
@@ -266,7 +276,7 @@ window.gpsDetail = (() => {
 		let raised = 0;
 		for (let k = 0; k < S * S; k++) if (src[k] && H[k] - base[k] > 1.5) raised++;
 		const key = `${map}_${tx}_${ty}`;
-		if (raised < minRaised) return { key, skipped: 'nothing raised', raised, wmos: wmos.length, underground: under };
+		if (raised < minRaised) return { key, skipped: 'nothing raised', raised, wmos: wmos.length, underground: under, undergroundWhole: whole };
 		const TD = performance.now();
 		// allowed error: maxError within `near` samples of a building (raised WMO or wall), groundError elsewhere
 		const mark = new Uint8Array(S * S);
@@ -373,20 +383,20 @@ window.gpsDetail = (() => {
 			nvAll += fine.nv; ntAll += fine.nt; ntLow += coarse.nt; ntFar += far.nt;
 		}
 		const TE = performance.now();
-		if (!blocks.length) return { key, skipped: 'no block with buildings', raised, wmos: wmos.length, underground: under };
+		if (!blocks.length) return { key, skipped: 'no block with buildings', raised, wmos: wmos.length, underground: under, undergroundWhole: whole };
 		const str = 'D2' + enc(blocks.length, 2) + blocks.join('');
 		const low = 'D2' + enc(lows.length, 2) + lows.join('');
 		const farStr = 'D2' + enc(fars.length, 2) + fars.join('');
 		return {
-			key, str, low, far: farStr, blocks: blocks.length, nv: nvAll, ntri: ntAll, ntriLow: ntLow, ntriFar: ntFar, maxBlockTris: Math.max(...blockStats), raised, wmos: wmos.length, underground: under, wmoTris, bytes: str.length, bytesLow: low.length,
+			key, str, low, far: farStr, blocks: blocks.length, nv: nvAll, ntri: ntAll, ntriLow: ntLow, ntriFar: ntFar, maxBlockTris: Math.max(...blockStats), raised, wmos: wmos.length, underground: under, undergroundWhole: whole, wmoTris, bytes: str.length, bytesLow: low.length,
 			ms: { load: Math.round(TL - T0), raster: Math.round(TD - TL), mesh: Math.round(TE - TD), total: Math.round(performance.now() - T0) },
 		};
 	}
 
-	const state = { running: false, progress: '', done: 0, total: 0, tiles: {}, low: {}, far: {}, stats: [], errors: [], underground: {} };
+	const state = { running: false, progress: '', done: 0, total: 0, tiles: {}, low: {}, far: {}, stats: [], errors: [], underground: {}, undergroundWhole: {} };
 	async function start({ maps = null, maxError = 1, groundError = 4, minRaised = 40, keepUnderground = false, only = null } = {}) {
 		if (state.running) return 'already running';
-		state.running = true; state.tiles = {}; state.low = {}; state.far = {}; state.stats = []; state.errors = []; state.underground = {}; state.done = 0;
+		state.running = true; state.tiles = {}; state.low = {}; state.far = {}; state.stats = []; state.errors = []; state.underground = {}; state.undergroundWhole = {}; state.done = 0;
 		try {
 			const list = [];
 			for (const m of await call('listMaps')) {
@@ -401,6 +411,7 @@ window.gpsDetail = (() => {
 				try {
 					const r = await tile(map, x, y, { maxError, groundError, minRaised, keepUnderground, wdt });
 					if (r.underground && r.underground.length) state.underground[r.key] = r.underground;
+					if (r.undergroundWhole && r.undergroundWhole.length) state.undergroundWhole[r.key] = r.undergroundWhole;
 					if (r.str) { state.tiles[r.key] = r.str; state.low[r.key] = r.low; state.far[r.key] = r.far; const { str, low, far, ...rest } = r; state.stats.push(rest); }
 				} catch (e) { state.errors.push(`${map}_${x}_${y}: ${e && e.message || e}`); }
 				state.done++;
@@ -410,9 +421,10 @@ window.gpsDetail = (() => {
 		} finally { state.running = false; }
 		return state.progress;
 	}
-	// tiles: every tile exported (only: those keys), underground: per tile, the underground WMOs left out (uids)
+	// tiles: every tile exported (only: those keys); underground: per tile, the caves and mines drawn with
+	// their exterior groups only (uids); undergroundWhole: those left out whole (groups not told apart)
 	function result() {
-		return { exportedAt: new Date().toISOString(), format: 'D2, see scripts/browser_export_detail.js', tiles: state.tiles, low: state.low, far: state.far, stats: state.stats, errors: state.errors, underground: state.underground };
+		return { exportedAt: new Date().toISOString(), format: 'D2, see scripts/browser_export_detail.js', tiles: state.tiles, low: state.low, far: state.far, stats: state.stats, errors: state.errors, underground: state.underground, undergroundWhole: state.undergroundWhole };
 	}
 	function download(name = 'gps-detail.json') {
 		const data = result();

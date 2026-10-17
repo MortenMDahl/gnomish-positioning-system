@@ -49,11 +49,11 @@ const api: Record<string, (...a: any[]) => Promise<any>> = {
 };
 const quiet = console.warn; console.warn = () => {}; // MapExplorer warns about every model it can't read
 (globalThis as any).window = { __gps: { call: (method: string, ...a: any[]) => api[method](...a), Delatin } };
-for (const f of ['scripts/browser_underground.js', 'scripts/browser_export_detail.js']) new Function(readFileSync(join(repo, f), 'utf8'))();
+for (const f of ['scripts/browser_underground.js', 'scripts/browser_wmo_groups.js', 'scripts/browser_export_detail.js']) new Function(readFileSync(join(repo, f), 'utf8'))();
 const gd = (globalThis as any).window.gpsDetail;
 
 const result = resume && existsSync(out) ? JSON.parse(readFileSync(out, 'utf8'))
-	: { exportedAt: new Date().toISOString(), format: 'D2, see scripts/browser_export_detail.js', tiles: {}, low: {}, far: {}, stats: [], errors: [], underground: {}, visited: [] };
+	: { exportedAt: new Date().toISOString(), format: 'D2, see scripts/browser_export_detail.js', tiles: {}, low: {}, far: {}, stats: [], errors: [], underground: {}, undergroundWhole: {}, visited: [] };
 const visited = new Set<string>(result.visited);
 const todo: [number, string[]][] = [];
 for (const m of await world.listMaps()) {
@@ -72,7 +72,7 @@ outer: for (const [map, keys] of todo) {
 		const chunk = keys.slice(i, i + 8);
 		await gd.start({ maps: [map], only: chunk });
 		const r = gd.result();
-		Object.assign(result.tiles, r.tiles); Object.assign(result.low, r.low); Object.assign(result.far, r.far); Object.assign(result.underground, r.underground);
+		Object.assign(result.tiles, r.tiles); Object.assign(result.low, r.low); Object.assign(result.far, r.far); Object.assign(result.underground, r.underground); Object.assign(result.undergroundWhole, r.undergroundWhole);
 		result.stats.push(...r.stats); result.errors.push(...r.errors);
 		for (const k of chunk) visited.add(k);
 		left -= chunk.length;
@@ -84,7 +84,6 @@ result.visited = [...visited];
 result.remaining = left;
 result.build = storage.stats.version;
 writeFileSync(out, JSON.stringify(result));
-const under = Object.entries(result.underground as Record<string, number[]>);
-const wmos = new Set(under.flatMap(([key, uids]) => uids.map((u) => `${key.split('_')[0]}:${u}`)));
-console.log(`wrote ${out}: ${visited.size} tiles visited, ${left} remaining; ${Object.keys(result.tiles).length} with buildings; underground WMOs left out on ${under.length} tiles (${wmos.size} WMOs); ${result.errors.length} errors`);
+const count = (o: Record<string, number[]>) => new Set(Object.entries(o).flatMap(([key, uids]) => uids.map((u) => `${key.split('_')[0]}:${u}`))).size;
+console.log(`wrote ${out}: ${visited.size} tiles visited, ${left} remaining; ${Object.keys(result.tiles).length} with buildings; caves and mines: ${count(result.underground)} with their exterior groups only, ${count(result.undergroundWhole)} left out whole; ${result.errors.length} errors`);
 for (const e of result.errors.slice(0, 20)) console.log('  ' + e);
