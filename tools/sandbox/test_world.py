@@ -5,10 +5,11 @@ L = lupa54.LuaRuntime()
 G = L.globals()
 G.SANDBOX_MEASURE = lambda text, size: len(text) * size * 0.55
 L.execute(open(f'{SITE}/engine.lua').read())
+L.execute(open(f'{SITE}/zones.lua').read())  # every zone of the two continents (make_zones.py)
 toc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'prototypes', 'GPS3D', 'GPS3D.toc')).read()
 gps3d_files = [l.strip().replace('\\', '/') for l in toc.splitlines() if l.strip() and not l.startswith('##')]
 t0 = time.time()
-for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua']), ('GPS3D', gps3d_files)]:
+for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'MapWindow.lua']), ('GPS3D', gps3d_files)]:
     for f in files:
         ok = G.SANDBOX_LOAD(addon, f, open(f'{SITE}/addons/{addon}/{f}').read())
         if not ok: print('LOAD FAILED', addon, f)
@@ -37,6 +38,18 @@ tick(30); chat()
 st, cam, pl = ns2.stats, ns2.cam, ns2.player
 check('opens following you in Northshire', ns2.CamMode() == 'follow' and cam.map == 0 and abs(cam.x - pl.x) < 1e-6, f'mode {ns2.CamMode()} map {cam.map}')
 check('opens looking straight down by default (nothing saved yet)', ns2.IsTopDown() and abs(cam.pitch - 89.9) < 1e-9 and G.GPS3D_DB.topDown == True, f'pitch {cam.pitch:.2f}')
+# First zoom-out over a continent (audit finding 3): no decoded heights are kept.
+gcount = L.eval('function() collectgarbage("collect"); collectgarbage("collect"); return collectgarbage("count") end')
+saved = (cam.map, cam.x, cam.y, cam.dist)
+ns2.SetCamMode('free')
+for mp, gx, gy in ((0, 32, 40), (1, 40, 30)):
+    cam.map, cam.x, cam.y, cam.dist = mp, gx * TILE, -gy * TILE, 4500
+    m0 = gcount(); t0 = time.perf_counter(); ns2.Render(); dt = (time.perf_counter() - t0) * 1000; m1 = gcount()
+    check(f'zoomed out over map {mp} for the first time: little memory kept (decoded heights took +20-28 MB before)', (m1 - m0) / 1024 < 6, f'+{(m1 - m0) / 1024:.1f} MB, first frame {dt:.0f} ms, {int(st.tiles)} tiles')
+
+cam.map, cam.x, cam.y, cam.dist = saved
+ns2.FollowMe('follow'); tick(40)
+
 G.SlashCmdList.GPS3D('top'); tick(30)  # the checks below were written for the tilted view
 check('/gps3d top turns it off and back to the tilted view', not ns2.IsTopDown() and abs(cam.pitch - 45) < 1e-6 and G.GPS3D_DB.topDown == False, f'pitch {cam.pitch:.2f} saved {G.GPS3D_DB.topDown}')
 check('Northshire: buildings drawn close up, within budget', st.detail > 0 and 0 < st.detailTris <= 4000, f'blocks {st.detail} building tris {st.detailTris} grid tris {st.tris} shown {st.shown}')
@@ -200,7 +213,7 @@ check('turned off stays off when the window opens again', not ns2.IsTopDown(), f
 ns2.SetCamMode('free')
 mouse('down', 0, 0, 'LeftButton'); mouse('move', -300, 0); tick(1); mouse('up', -300, 0, 'LeftButton'); tick(5)
 gx3, gy3 = cam.x / TILE, -cam.y / TILE
-ns2.ui.modeSwitch._scripts.OnClick(ns2.ui.modeSwitch); tick(3)
+ns2.ui.modeSwitch._scripts.OnClick(ns2.ui.modeSwitch, 'RightButton'); tick(3)  # the mode ring, back one: 3D -> 2D
 v = G.SANDBOX.namespaces['GnomishPositioningSystem'].view
 check('3D -> 2D (Free): the map shows where the 3D view looked', G.GPS_MapFrame.IsShown(G.GPS_MapFrame) and abs(v.cx - gx3) < 1e-6 and abs(v.cy - gy3) < 1e-6 and not v.follow, f'{v.cx:.3f},{v.cy:.3f} vs {gx3:.3f},{gy3:.3f}')
 ns1 = G.SANDBOX.namespaces['GnomishPositioningSystem']
@@ -336,6 +349,55 @@ ns2.FollowMe('follow'); tick(40)
 for k in range(40): mouse('wheel', 0, 0, '', 1); tick(1)
 check('Follow: still on you and at your height after zooming all the way in', abs(cam.x - pl.x) < 1e-6 and abs(cam.y - pl.y) < 1e-6 and abs(cam.th - pl.h) < 1e-6 and clearance() >= CLEAR - 0.5, f'dist {cam.dist:.1f}, {clearance():.2f} yd above the ground')
 ns2.SetTopDown(False, True)
+
+# Heights are read from the tile strings (audit finding 3): every height of every tile equals an
+# independent decode of the string, lo and hi are its lowest and highest, and nothing is decoded ahead.
+res = L.eval(r"""function()
+	local B = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	local V = {}
+	for i = 1, 64 do V[B:byte(i)] = i - 1 end
+	local ns = SANDBOX.namespaces.GPS3D
+	local tiles, bad, tails = 0, 0, 0
+	for map, m in pairs(ns.World) do
+		for key, s in pairs(m) do
+			tiles = tiles + 1
+			if #s == 3 + 33 * 33 * 2 + 2 then tails = tails + 1 end
+			local base = (V[s:byte(1)] * 64 + V[s:byte(2)]) * 64 + V[s:byte(3)] - 131072
+			local h = ns.TileHeights(map, key % 64, key // 64)
+			local lo, hi = math.huge, -math.huge
+			for i = 1, 33 * 33 do
+				local v = (base + V[s:byte(i * 2 + 2)] * 64 + V[s:byte(i * 2 + 3)]) * 0.5
+				if v < lo then lo = v end
+				if v > hi then hi = v end
+				if h[i] ~= v then bad = bad + 1 end
+			end
+			if h.lo ~= lo or h.hi ~= hi or rawget(h, 1) ~= nil then bad = bad + 1 end
+		end
+	end
+	return tiles, bad, tails
+end""")()
+check('heights read from the strings equal a full decode, every tile (lo and hi too, no table of heights kept)', res[1] == 0 and res[0] > 2000, f'{res[0]} tiles, {res[1]} mismatches')
+check('the 3D data carries each tile\'s highest height (build_world.py), all tiles', res[2] == res[0], f'{res[2]} of {res[0]}')
+# One position rule for both views (finding 5): the 3D view's position is the 2D map's, swapaxes and
+# flipfacing included. Your position is read every frame (finding 11).
+ns1 = G.SANDBOX.namespaces['GnomishPositioningSystem']
+place(-9464, 62, 0, 1.6, 'Elwynn Forest', 'Goldshire')
+ns2.FollowMe('follow'); tick(40)  # the flight to you ends
+def same_place():
+    m, gx, gy, f = list(ns1.PlayerPosition())[0:4]
+    return m == pl.map and abs(pl.x - gx * TILE) < 1e-6 and abs(pl.y + gy * TILE) < 1e-6 and abs(pl.facing - f) < 1e-12
+ok = [same_place()]
+G.SlashCmdList.GPS('swapaxes'); G.SlashCmdList.GPS('flipfacing'); tick(1, 1 / 60)
+ok.append(same_place())
+G.SlashCmdList.GPS('swapaxes'); G.SlashCmdList.GPS('flipfacing'); tick(1, 1 / 60)
+ok.append(same_place())
+G.SANDBOX_CHAT()
+check('3D position = the 2D map\'s (GPS_API.PlayerPosition), also with /gps swapaxes and flipfacing', all(ok), str(ok))
+frames = 0
+for k in range(5):
+    place(-9464 + k * 0.3, 62, 0, 1.6, 'Elwynn Forest', 'Goldshire'); tick(1, 1 / 60)
+    if abs(pl.y + (32 - (-9464 + k * 0.3) / TILE) * TILE) < 1e-6 and abs(cam.y - pl.y) < 1e-6: frames += 1
+check('following in 3D: your position and the view move every frame', frames == 5, f'{frames} of 5 frames')
 
 G.SlashCmdList.GPS3D('test'); tick(80); chat()
 print(f'\n{sum(r[1] for r in results)} of {len(results)} checks passed')

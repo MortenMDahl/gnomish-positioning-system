@@ -75,6 +75,16 @@ thing to thin (`AHEAD_STEP`).
   simplified with meshoptimizer, had 7,262 triangles for the whole tile at 1 yd; delatin gives 14,030 for the
   same tile and error. Worth trying meshoptimizer in the exporter.
 
+## Heights read from the strings (2026-10-17)
+
+`TileHeights` used to decode a tile's 1,089 heights into a table the first time anything touched the
+tile, and kept it; zoomed out, the view touches every tile of a continent just for its height range.
+Measured in the sandbox (native Lua 5.4), first zoom-out over the Eastern Kingdoms / Kalimdor:
+92 / 164 ms in one frame and +20.6 / +28.3 MB of Lua memory, kept. Now the data carries each tile's
+highest height (2 characters at the end of its string, `build_world.py`) and heights are read from
+the string when asked for (`__index`): 19 / 20 ms and +2.7 MB (mostly the meshes). A steady frame
+reads about 240 heights; frame times in towns did not change (`perf_buildings.py`, same within noise).
+
 ## How to measure
 
 `tools/sandbox/perf_focus.py <label>`: per-frame median ms, C calls by type and garbage for fixed scenes
@@ -88,3 +98,16 @@ Minimap images are now chosen by on-screen size (`MINIMAP_PX` = 80), not by mesh
 images in use: up to 67-74 in the sandbox (straight down at 3,000 yd, tilted at 1,500 yd) instead of up to 19.
 At 512 x 512 that is roughly 10-20 MB of texture memory, depending on the client's format. Raise `MINIMAP_PX`
 if that turns out to matter.
+
+## Quest markers (2026-10-17)
+
+Measured in the sandbox (native Lua, Elwynn Forest, 7 stand-in quests, best of 3 runs of 60 frames or 200 layouts): the 3D view at 2,500 yd tilted, 5 markers in view, 2.05-2.06 ms per frame with markers against 2.03-2.16 ms without (within the run-to-run noise); the 2D map 0.23-0.26 ms per layout with markers and the tracked quest's area against 0.21 ms without. The quest list is built once per change (0.25 s after a burst of quest events), not per frame; each frame only moves the markers (2D: on every layout; 3D: in `Render`, each quest's ground height looked up once).
+
+## The game's models (2026-10-17)
+
+`Models.lua` puts the game's own props, trees and (if the game allows) buildings in the ModelScene. The Lua side is kept off the per-frame path: `Render` only compares the camera with the last choice (`ns.UpdateModels`, a few comparisons); the choice itself runs at most 10 times a second, and only after the view moved 4 % of the model distance, zoomed 5 %, or turned or tilted 2 degrees. Actors are placed once when chosen (the game moves nothing per frame but the scene's camera), keep their model while chosen again, and an actor already showing a model is reused for the same model before another one loads; at most 40 loads per choice.
+
+Measured in the sandbox (native Lua 5.4; `tools/sandbox/perf_models.py` and `test_models.py`'s COST line): one choice, tilted 400 yd over Goldshire with 250 props, the occlusion test included, 2.9-3.1 ms on average (about 5 ms at worst), so at most about 30 ms a second while the view keeps moving and nothing while it stands still. `Render` itself: 11.3 ms with props off and 13.4 ms with 250 (Goldshire) or 17.8 and 15.6 ms (Stormwind), within the run-to-run spread of the sandbox. Tiles are decoded when first needed (a busy tile, about 4,000 placements, once) and 200 are kept; each map's buildings (2,246 in the Eastern Kingdoms) are listed once.
+
+Not measured here, and the main unknown: what the game itself spends drawing the actors (hundreds of animated M2 models, and WMOs if they load). The debug log's `PERF` lines carry the game's frame rate next to the number of models shown, choices and their times and model loads (TESTING.md section 10 step 4 gives the runs to compare); the settings (*Props and trees at most*, *Model distance*, *Smallest model*) are the knobs.
+

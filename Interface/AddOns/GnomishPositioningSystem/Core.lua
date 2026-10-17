@@ -7,19 +7,24 @@
 --   gx = 32 - Y / TILE,  gy = 32 - X / TILE      (the same convention as MapExplorer's tileOf)
 -- UnitPosition("player") returns X (north) first and Y (west) second.
 local addonName, ns = ...
+-- the debug log (Debug.lua, loaded before this file); without it, logging does nothing
+ns.Log = ns.Log or function() end
+ns.LogValue = ns.LogValue or tostring
+ns.DebugCommand = ns.DebugCommand or function() print("|cff33ff99GPS|r: the debug log (Debug.lua) is not loaded.") end
 
 local TILE = 1600 / 3                -- yards per ADT tile
 local ADDON_PATH = "Interface\\AddOns\\" .. addonName .. "\\"
 local LIVE_MIN_SCALE = 80            -- px per tile from which the live minimap tiles are drawn
 local MIN_SCALE, MAX_SCALE = 4, 2048 -- px per tile
-local SEA = { 0.059, 0.141, 0.204 }  -- #0f2434, the same as the overview images' empty tiles
-local UPDATE_INTERVAL = 0.05         -- seconds between player position updates
+local SEA = { 8 / 255, 17 / 255, 16 / 255 } -- #081110, open sea in the game's minimap images (and the overview images' empty tiles), so the sea runs on past a map's last tiles
+local UPDATE_INTERVAL = 0.2          -- seconds between title, footer and Me-ring updates (your position: every frame)
 
 local floor, ceil, min, max = math.floor, math.ceil, math.min, math.max
 local Maps = ns.Maps or {}
 local OverviewPx = ns.OverviewPx or 64
 
-local defaults = { point = { "CENTER", "CENTER", 0, 0 }, width = 900, height = 650, map = 0, follow = true, scale = 128 }
+local defaults = { point = { "CENTER", "CENTER", 0, 0 }, width = 900, height = 650, map = 0, follow = true, scale = 128, mode = "2D", autoTraditional = true, quests = true, addonMarkers = true }
+ns.defaults = defaults
 
 -- Values the game may hide from addons in some situations (Forever carries Midnight's "secret values").
 local function Usable(v)
@@ -36,16 +41,18 @@ function ns.GridToWorld(gx, gy)
 	return (32 - gy) * TILE, (32 - gx) * TILE
 end
 
--- The player's map, grid position and facing, or nil where the game does not give them (instances).
+-- The player's map, grid position, facing and height (UnitPosition's Z, unchecked), or nil where the
+-- game does not give them (instances). The one place the game's position becomes GPS's: the 3D view
+-- reads it too (GPS_API.PlayerPosition), so /gps swapaxes and flipfacing apply to both.
 function ns.PlayerPosition()
-	local X, Y, _, instanceID = UnitPosition("player")
+	local X, Y, Z, instanceID = UnitPosition("player")
 	if not (Usable(X) and Usable(Y) and Usable(instanceID)) then return nil end
 	if ns.db and ns.db.swapAxes then X, Y = Y, X end -- /gps swapaxes, if the self-test reports SWAPPED
 	local gx, gy = ns.WorldToGrid(X, Y)
 	local facing = GetPlayerFacing and GetPlayerFacing()
 	if not Usable(facing) then facing = nil end
 	if facing and ns.db and ns.db.flipFacing then facing = -facing end -- /gps flipfacing, if the arrow turns the wrong way
-	return instanceID, gx, gy, facing
+	return instanceID, gx, gy, facing, Z
 end
 
 -- Maps in browsing order: continents, then Forever's open-world maps, then the rest by name.
@@ -73,7 +80,7 @@ end
 ------------------------------------------------------------------------------------------------
 local GOLD, GREY, DIM = { 1, 0.82, 0 }, { 0.8, 0.8, 0.8 }, { 0.45, 0.45, 0.45 }
 local BRASS = { 0.79, 0.64, 0.29 }   -- ring labels and icons at rest (muted, like old brass)
-ns.colors = { gold = GOLD, grey = GREY, dim = DIM, brass = BRASS }
+ns.colors = { gold = GOLD, grey = GREY, dim = DIM, brass = BRASS, sea = SEA }
 local MEDIA = ADDON_PATH .. "Media\\"
 ns.MEDIA = MEDIA
 local RING = 30                      -- ring button size in px
@@ -244,12 +251,40 @@ local function Shade(parent, top, height)
 	return t
 end
 
+-- The three ways GPS shows the world, one window each, shown one at a time at the same place and
+-- size: the 2D map (this file), the 3D view (GPS3D) and the traditional map (Blizzard's own map art,
+-- MapWindow.lua). The mode ring steps through them in this order; ns.modes holds how to open each.
+ns.modeOrder = { "2D", "3D", "Map" }
+ns.modeNames = { ["2D"] = "2D map", ["3D"] = "3D view", Map = "Traditional map" }
+ns.modes = {}
+
+-- The modes that can open here (3D needs GPS3D; the traditional map needs Blizzard's map canvas).
+function ns.AvailableModes()
+	local list = {}
+	for _, name in ipairs(ns.modeOrder) do
+		local m = ns.modes[name]
+		if m and (not m.available or m.available()) then list[#list + 1] = name end
+	end
+	return list
+end
+
+-- The mode after (step 1) or before (step -1) this one.
+function ns.NextMode(name, step)
+	local list = ns.AvailableModes()
+	if #list == 0 then return name end
+	local index = 1
+	for i, m in ipairs(list) do if m == name then index = i break end end
+	return list[(index - 1 + (step or 1)) % #list + 1]
+end
+
 -- Dresses a window (a BackdropTemplate frame) and its map canvas in the GPS look and returns its
--- controls: title, subtitle with prev/next, close, footer text, zoom in/out, the 2D/3D ring
--- (modeSwitch, labelled with the view it is in) and the Me ring, plus ui.SetRings(list) to lay out
--- the column of rings down the right edge (top to bottom; GPS3D adds its own).
--- opts.mode is "2D" or "3D"; opts.onMoved / opts.onSized are called after the user moves or
--- resizes the window.
+-- controls: title, subtitle with prev/next, close, footer text, zoom in/out, the compass, the mode
+-- ring (modeSwitch, showing the mode the window is: "2D", "3D" or a folded map; click for the next
+-- mode, right-click for the one before) and the Me ring, plus ui.SetRings(list) to lay out the column
+-- of rings down the right edge (top to bottom; GPS3D adds its own after these three).
+-- opts.mode is "2D", "3D" or "Map"; opts.onMoved / opts.onSized are called after the user moves or
+-- resizes the window; opts.chromeLevel puts the controls at that frame level (the traditional map's
+-- pins sit up to level 9000, so its window puts them above).
 function ns.ApplyChrome(frame, canvas, opts)
 	opts = opts or {}
 	frame:SetBackdrop({
@@ -267,7 +302,7 @@ function ns.ApplyChrome(frame, canvas, opts)
 	local ui = {}
 	local chrome = CreateFrame("Frame", nil, frame)
 	chrome:SetAllPoints(canvas)
-	chrome:SetFrameLevel(canvas:GetFrameLevel() + 40)
+	chrome:SetFrameLevel(opts.chromeLevel or canvas:GetFrameLevel() + 40)
 	ui.chrome = chrome
 	Shade(chrome, true, 56)
 	Shade(chrome, false, 36)
@@ -309,14 +344,30 @@ function ns.ApplyChrome(frame, canvas, opts)
 	close.tooltip = "Close"
 	ui.close = close
 
-	-- The rings down the right edge, under the close button.
-	ui.modeSwitch = RingButton(chrome)
-	ui.modeSwitch:SetLabel(opts.mode or "2D")
-	if (opts.mode or "2D") == "2D" then
-		ui.modeSwitch.tooltip = { "2D map", "Click: 3D view of the same place" }
+	-- The rings down the right edge, under the close button. Every window starts the column with the
+	-- same three, compass, mode and Me, so they stay under the mouse when you switch modes; the 3D
+	-- view adds its own below them. The compass needle keeps its own red and grey; the 2D map and the
+	-- traditional map are always north-up, so there it just points up (GPS3D turns it and gives it a click).
+	ui.compass = RingButton(chrome, { "Compass", "North is up" })
+	ui.compass:SetIcon(MEDIA .. "Needle", 0.72)
+	ui.compass.icon:SetVertexColor(1, 1, 1)
+	local mode = opts.mode or "2D"
+	ui.modeSwitch = RingButton(chrome, function()
+		local nextMode, prevMode = ns.NextMode(mode, 1), ns.NextMode(mode, -1)
+		if nextMode == mode then return ns.modeNames[mode] end
+		local tip = { ns.modeNames[mode], "Click: " .. ns.modeNames[nextMode] .. " of the same place" }
+		if prevMode ~= nextMode then tip[3] = "Right-click: " .. ns.modeNames[prevMode] end
+		return tip
+	end)
+	ui.modeSwitch:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	if mode == "Map" then
+		ui.modeSwitch:SetIcon(MEDIA .. "Map", 0.62)
 	else
-		ui.modeSwitch.tooltip = { "3D view", "Click: 2D map of the same place" }
+		ui.modeSwitch:SetLabel(mode)
 	end
+	ui.modeSwitch:SetScript("OnClick", function(_, button)
+		ns.StepMode(mode, button == "RightButton" and -1 or 1)
+	end)
 	ui.me = RingButton(chrome)
 	ui.me:SetIcon("Interface\\Minimap\\MinimapArrow", 0.72)
 	ui.me.tooltip = { "Me", "Centre on you and follow" }
@@ -334,7 +385,7 @@ function ns.ApplyChrome(frame, canvas, opts)
 		end
 		ui.rings = list
 	end
-	ui.SetRings({ ui.modeSwitch, ui.me })
+	ui.SetRings({ ui.compass, ui.modeSwitch, ui.me })
 
 	-- Bottom: where you are on the left, the minimap's zoom buttons on the right.
 	ui.footer = chrome:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -421,6 +472,7 @@ local liveTiles = {}   -- key (y * 64 + x) -> texture currently showing that til
 local livePool = {}    -- unused live tile textures
 local atlasTextures = {} -- per atlas of the current map
 ns.liveTiles = liveTiles
+ns.LIVE_MIN_SCALE = LIVE_MIN_SCALE -- for the tests
 
 local function AcquireLive()
 	local t = next(livePool)
@@ -540,11 +592,30 @@ function ns.Layout()
 		if not wanted[key] then ReleaseLive(key) end
 	end
 	ns.DrawGrid()
+	if ns.LayoutAddonPins then ns.LayoutAddonPins() end -- other addons' markers (Compat.lua)
+	if ns.LayoutQuests then ns.LayoutQuests() end -- your quests (Quests.lua)
 	ns.UpdatePlayer()
 end
 
+-- With the debug log on: how long each layout takes (Debug.lua reports it every 5 s).
+do
+	local Layout = ns.Layout
+	function ns.Layout()
+		local p = ns.perf2D
+		if not p then return Layout() end
+		local t0 = debugprofilestop()
+		Layout()
+		local ms = debugprofilestop() - t0
+		p.n, p.sum = p.n + 1, p.sum + ms
+		if ms > p.max then p.max = ms end
+	end
+end
+
+local arrowAt = {} -- where the arrow was last put (screen x, y, facing): it is only moved when that changes
 function ns.UpdatePlayer()
 	local mapID, gx, gy, facing = ns.PlayerPosition()
+	-- following you onto another map (a boat, a portal): the map goes with you
+	if view.follow and mapID ~= nil and mapID ~= view.map and Maps[mapID] then return ns.ShowMap(mapID, true) end
 	if mapID ~= nil and mapID == view.map then
 		if view.follow then
 			if math.abs(gx - view.cx) > 1e-6 or math.abs(gy - view.cy) > 1e-6 then
@@ -553,19 +624,49 @@ function ns.UpdatePlayer()
 			end
 		end
 		local px, py = ns.GridToScreen(gx, gy)
-		arrow:ClearAllPoints()
-		arrow:SetPoint("CENTER", canvas, "TOPLEFT", px, -py)
-		if facing then arrow:SetRotation(facing) end
+		if px ~= arrowAt[1] or py ~= arrowAt[2] then
+			arrow:ClearAllPoints()
+			arrow:SetPoint("CENTER", canvas, "TOPLEFT", px, -py)
+			arrowAt[1], arrowAt[2] = px, py
+		end
+		if facing and facing ~= arrowAt[3] then arrow:SetRotation(facing); arrowAt[3] = facing end
 		arrow:Show()
 	else
 		arrow:Hide()
 	end
 end
 
+-- The name of the zone at a grid point of a GPS map: the game's map there (C_Map), or the zone a
+-- dungeon or other small map there belongs to; nil over the sea, between zones, or where the game has
+-- no map. Cached per eighth of a tile (66 yards).
+local MAPTYPE_ZONE = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
+local zoneNames = {}
+function ns.ZoneNameAt(instance, gx, gy)
+	if not (gx and gy and C_Map and C_Map.GetMapPosFromWorldPos and CreateVector2D) then return nil end
+	local key = instance .. ":" .. floor(gx * 8) .. ":" .. floor(gy * 8)
+	local name = zoneNames[key]
+	if name == nil then
+		local X, Y = ns.GridToWorld(gx, gy)
+		local id = C_Map.GetMapPosFromWorldPos(instance, CreateVector2D(X, Y))
+		local info = id and C_Map.GetMapInfo(id)
+		while info and info.mapType and info.mapType > MAPTYPE_ZONE and info.parentMapID and info.parentMapID > 0 do
+			local parent = C_Map.GetMapInfo(info.parentMapID)
+			if not parent then break end
+			info = parent
+		end
+		-- a continent or the world map there means no zone (the sea, or between zones)
+		name = info and (info.mapType == nil or info.mapType >= MAPTYPE_ZONE) and info.name or false
+		zoneNames[key] = name
+	end
+	return name or nil
+end
+
+-- Title: the zone in the middle of the view (where you are while following you), else the map's
+-- name; subtitle: the map's name. Where you are is in the footer.
 local function UpdateTitle()
 	local m = Maps[view.map]
-	local mapID = ns.PlayerPosition()
-	local zone = (mapID == view.map) and GetZoneText and GetZoneText() or nil
+	local zone = ns.ZoneNameAt(view.map, view.cx, view.cy)
+	if not zone and view.follow and ns.PlayerPosition() == view.map and GetZoneText then zone = GetZoneText() end
 	ui.title:SetText((zone and zone ~= "") and zone or (m and m.name) or ("Map " .. tostring(view.map)))
 	ui.subtitle:SetText(m and m.name or "")
 end
@@ -583,7 +684,8 @@ function ns.FitMap()
 end
 
 function ns.ShowMap(mapID, keepView)
-	if not Maps[mapID] then return end
+	if not Maps[mapID] then ns.Log("MAP", "ShowMap %s: not in GPS data", tostring(mapID)) return end
+	if mapID ~= view.map then ns.Log("MAP", "2D map %s -> %s (%s)", tostring(view.map), tostring(mapID), Maps[mapID].name) end
 	if mapID ~= view.map then ReleaseAllLive() end
 	view.map = mapID
 	ns.db.map = mapID
@@ -604,9 +706,11 @@ end
 function ns.FollowPlayer()
 	local mapID, gx, gy = ns.PlayerPosition()
 	if not (mapID and Maps[mapID]) then
+		ns.Log("MAP", "Me: no position on a GPS map (map %s)", tostring(mapID))
 		print("|cff33ff99GPS|r: your position is not available here.")
 		return
 	end
+	ns.Log("MAP", "2D follows you: map %s at %.2f, %.2f", tostring(mapID), gx, gy)
 	view.follow = true
 	ns.db.follow = true
 	if view.scale < LIVE_MIN_SCALE then view.scale = 128 end -- close enough to see the real tiles
@@ -617,15 +721,6 @@ end
 ui.prev:SetScript("OnClick", function() ns.CycleMap(-1) end)
 ui.next:SetScript("OnClick", function() ns.CycleMap(1) end)
 ui.me:SetScript("OnClick", function() ns.FollowPlayer() end)
-ui.modeSwitch:SetScript("OnClick", function()
-	if GPS3D_API and GPS3D_API.Show then
-		-- the 3D view opens where this map looks (or on you, when following)
-		GPS3D_API.Show(frame, not view.follow and { map = view.map, gx = view.cx, gy = view.cy } or nil)
-		frame:Hide()
-	else
-		print("|cff33ff99GPS|r: the 3D view needs the GPS3D addon (prototypes/GPS3D).")
-	end
-end)
 ns.buttons = { prev = ui.prev, next = ui.next, me = ui.me }
 
 ------------------------------------------------------------------------------------------------
@@ -687,14 +782,16 @@ function ns.WhereText()
 end
 
 -- Footer: what is under the cursor, in tiles and world yards (handy for checking alignment).
+-- Your position and the Me ring every frame (a map following you moves smoothly); the title and
+-- footer text on a timer (UPDATE_INTERVAL), and at once when the window opens.
 local elapsedSince = 0
 frame:SetScript("OnUpdate", function(_, elapsed)
+	ns.UpdatePlayer()
+	if ui.me.active ~= view.follow then ui.me:SetActive(view.follow) end -- the Me ring is gold while following you
 	elapsedSince = elapsedSince + elapsed
 	if elapsedSince < UPDATE_INTERVAL then return end
 	elapsedSince = 0
-	ns.UpdatePlayer()
 	UpdateTitle()
-	if ui.me.active ~= view.follow then ui.me:SetActive(view.follow) end -- the Me ring is gold while following you
 	if canvas:IsMouseOver() and ns.debugGrid then
 		-- with /gps grid on: what is under the cursor, in tiles and world yards
 		local gx, gy = ns.ScreenToGrid(CursorInCanvas())
@@ -709,6 +806,7 @@ end)
 
 frame:SetScript("OnSizeChanged", function() if frame:IsShown() then ns.Layout() end end)
 frame:SetScript("OnShow", function()
+	elapsedSince = UPDATE_INTERVAL -- the footer's text on the first frame
 	UpdateTitle()
 	local mapID = ns.PlayerPosition()
 	if view.follow and mapID and Maps[mapID] then
@@ -727,9 +825,157 @@ end
 ------------------------------------------------------------------------------------------------
 -- Start-up, slash command and key binding
 ------------------------------------------------------------------------------------------------
+------------------------------------------------------------------------------------------------
+-- Modes: which window opens, and switching between them
+------------------------------------------------------------------------------------------------
+-- ns.modes[name] = { Frame = function() return the window end, open = function(from, focus),
+--   focus = function() return { map, gx, gy } the window looks at, or nil while it shows you end,
+--   available = function() return true when it can open end }
+-- from: a window whose place and size to take; focus: { map, gx, gy } to look at, "you" to show
+-- you (the window being left was showing you), or nil to open as it was last time.
+
+-- True where GPS can show you: the game gives your position and GPS has that map.
+function ns.PlayerOnGPSMap()
+	local mapID = ns.PlayerPosition()
+	return mapID ~= nil and Maps[mapID] ~= nil
+end
+
+local function Available(name)
+	local m = ns.modes[name]
+	return m ~= nil and (not m.available or m.available())
+end
+
+-- The window shown now, if any: its mode and that mode's entry.
+function ns.ShownMode()
+	for _, name in ipairs(ns.modeOrder) do
+		local m = ns.modes[name]
+		local f = m and m.Frame()
+		if f and f:IsShown() then return name, m end
+	end
+end
+
+-- Opens a mode, taking the place and size of the window `from` (hidden afterwards).
+function ns.OpenMode(name, from, focus)
+	local m = ns.modes[name]
+	if not (m and Available(name)) then return false end
+	local target = m.Frame()
+	if m.open(from ~= target and from or nil, focus) == false then ns.Log("MODE", "open %s failed", name) return false end
+	if from and from ~= target then from:Hide() end
+	ns.Log("MODE", "opened %s, focus %s", name, ns.LogValue(focus))
+	return true
+end
+
+-- The mode ring: the next (step 1) or previous (step -1) mode, looking at the same place. A mode
+-- chosen here is remembered for opening next time.
+function ns.StepMode(name, step)
+	local target = ns.NextMode(name, step)
+	if target == name then
+		if name ~= "3D" and not Available("3D") then print("|cff33ff99GPS|r: the 3D view needs the GPS3D addon (prototypes/GPS3D).") end
+		return
+	end
+	local m = ns.modes[name]
+	local focus = m and m.focus and m.focus() or "you"
+	ns.Log("MODE", "mode ring: %s -> %s", name, target)
+	if ns.OpenMode(target, m and m.Frame(), focus) then
+		ns.db.mode = target
+		ns.autoMap = nil
+	end
+end
+
+-- What opening shows: the mode you last chose, except the traditional map where GPS cannot show you
+-- (dungeons, raids and other places where the game gives no position). Second value: true when that
+-- exception applied.
+function ns.DefaultMode()
+	local chosen = ns.db and ns.db.mode or "2D"
+	if not Available(chosen) then chosen = "2D" end
+	if chosen ~= "Map" and ns.db and ns.db.autoTraditional and Available("Map") and not ns.PlayerOnGPSMap() then return "Map", true end
+	return chosen, false
+end
+
+-- After a loading screen or a zone change, when that changed whether GPS can show you: a 2D or 3D
+-- window that was showing you switches to the traditional map where GPS cannot show you, and back
+-- to your mode once it can again (only when that switch was automatic). A mode you pick with the
+-- ring stays until the next such change.
+function ns.CheckAutoMode()
+	local onMap = ns.PlayerOnGPSMap()
+	local changed = onMap ~= ns.lastOnMap
+	ns.lastOnMap = onMap
+	local name, m = ns.ShownMode()
+	if not (name and changed) then return end
+	ns.Log("MODE", "GPS can show you: %s (window %s, switched automatically: %s)", tostring(onMap), name, tostring(ns.autoMap))
+	if name ~= "Map" and not onMap and ns.db.autoTraditional and Available("Map") and not (m.focus and m.focus()) then
+		if ns.OpenMode("Map", m.Frame(), "you") then ns.autoMap = true end
+	elseif name == "Map" and ns.autoMap and onMap then
+		local back = ns.db and ns.db.mode or "2D"
+		if back == "Map" or not Available(back) then back = "2D" end
+		if ns.OpenMode(back, m.Frame(), "you") then ns.autoMap = nil end
+	end
+end
+
+-- Opens a mode by name (and remembers it), in place of whichever window is open: /gps 2d|3d|map, and
+-- GPS3D's /gps3d commands. Already open: nothing changes.
+function ns.OpenNamed(name)
+	local shown, m = ns.ShownMode()
+	if shown == name then return true end
+	if ns.OpenMode(name, m and m.Frame() or frame, nil) then
+		ns.db.mode = name
+		ns.autoMap = nil
+		return true
+	end
+	print("|cff33ff99GPS|r: " .. ns.modeNames[name] .. " is not available here.")
+	return false
+end
+
+-- Puts the window back in the middle at its first size (/gps reset, and the button in the settings),
+-- whichever mode is open.
+function ns.ResetWindow()
+	ns.Log("WINDOW", "reset to the middle at %dx%d", defaults.width, defaults.height)
+	ns.db.point, ns.db.width, ns.db.height = defaults.point, defaults.width, defaults.height
+	frame:SetSize(ns.db.width, ns.db.height)
+	frame:ClearAllPoints()
+	frame:SetPoint("CENTER")
+	local name, m = ns.ShownMode()
+	if name and name ~= "2D" then ns.CopyGeometry(m.Frame(), frame) end
+end
+
+-- Keeps the place and size of another mode's window as the saved one (held by the 2D window).
+function ns.SaveGeometry(from)
+	if not (from and ns.db) then return end
+	ns.CopyGeometry(frame, from)
+	ns.SaveFrame()
+end
+
+ns.modes["2D"] = {
+	Frame = function() return frame end,
+	open = function(from, focus)
+		if focus == "you" then
+			-- the window being left was showing you: follow you here too, where GPS can
+			if ns.PlayerOnGPSMap() then view.follow = true; ns.db.follow = true end
+			focus = nil
+		end
+		GPS_API.Show(from, focus)
+	end,
+	focus = function() return not view.follow and { map = view.map, gx = view.cx, gy = view.cy } or nil end,
+}
+ns.modes["3D"] = {
+	Frame = function() return GPS3D_API and GPS3D_API.frame end,
+	available = function() return GPS3D_API ~= nil and GPS3D_API.Show ~= nil end,
+	open = function(from, focus) GPS3D_API.Show(from, type(focus) == "table" and focus or nil) end,
+	focus = function() return GPS3D_API.Focus and GPS3D_API.Focus() or nil end,
+}
+
 local events = CreateFrame("Frame")
 events:RegisterEvent("ADDON_LOADED")
+events:RegisterEvent("PLAYER_ENTERING_WORLD")
+events:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 events:SetScript("OnEvent", function(self, event, name)
+	if event ~= "ADDON_LOADED" then
+		-- the position can arrive a moment after the event: check now and again shortly
+		if not ns.db then return end
+		ns.CheckAutoMode()
+		C_Timer.After(1, ns.CheckAutoMode)
+		return
+	end
 	if name ~= addonName then return end
 	self:UnregisterEvent("ADDON_LOADED")
 	GnomishPositioningSystemDB = GnomishPositioningSystemDB or {}
@@ -748,9 +994,18 @@ events:SetScript("OnEvent", function(self, event, name)
 	view.scale = db.scale
 end)
 
+-- The key binding and /gps: close whichever window is open, or open the one that fits (DefaultMode)
+-- at the saved place and size.
 function GPS_Toggle()
-	if GPS3D_Frame and GPS3D_Frame:IsShown() then GPS3D_Frame:Hide() return end
-	frame:SetShown(not frame:IsShown())
+	local _, m = ns.ShownMode()
+	if m then m.Frame():Hide() return end
+	local mode, auto = ns.DefaultMode()
+	ns.Log("MODE", "toggle: opening %s%s", mode, auto and " (GPS cannot show you here)" or "")
+	if not ns.OpenMode(mode, frame, nil) then
+		mode, auto = "2D", false
+		ns.OpenMode(mode, frame, nil)
+	end
+	ns.autoMap = auto or nil
 end
 
 -- For the GPS3D window: the shared look, and switching back to 2D at the same place and size.
@@ -777,6 +1032,19 @@ GPS_API = {
 		if ns.db then ns.SaveFrame() end
 	end,
 	frame = frame,
+	-- modes: the mode ring's step (name, 1 or -1), and opening a mode by name
+	StepMode = function(name, step) ns.StepMode(name, step) end,
+	OpenMode = function(name, from, focus) return ns.OpenMode(name, from, focus) end,
+	OpenNamed = function(name) return ns.OpenNamed(name) end,
+	-- keep a window's place and size as the saved one (the 3D window calls it after a move or resize)
+	SaveGeometry = function(from) ns.SaveGeometry(from) end,
+	-- your map, grid position, facing and height (see ns.PlayerPosition)
+	PlayerPosition = function() return ns.PlayerPosition() end,
+	-- the debug log (Debug.lua): Log(category, format, ...), and whether it is on
+	Log = function(...) return ns.Log(...) end,
+	DebugOn = function() return ns.debugOn end,
+	-- the zone at a grid point (see ns.ZoneNameAt): the 3D view's title
+	ZoneNameAt = function(instance, gx, gy) return ns.ZoneNameAt(instance, gx, gy) end,
 	-- map data for the 3D view's textures
 	Maps = Maps,
 	OverviewPath = ADDON_PATH .. "Overview\\",
@@ -790,10 +1058,15 @@ BINDING_NAME_GPS_TOGGLE = "Toggle the map"
 -- Self-test (/gps test): prints a report to copy back (see TESTING.md)
 ------------------------------------------------------------------------------------------------
 local function Report(fmt, ...)
-	print("|cff33ff99GPS test|r " .. fmt:format(...))
+	local text = fmt:format(...)
+	print("|cff33ff99GPS test|r " .. text)
+	ns.Log("TEST", "%s", text)
 end
 
 function ns.SelfTest()
+	local openMode, auto = ns.DefaultMode()
+	local shownName, shown = ns.ShownMode()
+	if shown and shownName ~= "2D" then ns.OpenMode("2D", shown.Frame(), nil) end
 	frame:Show()
 	local nMaps, nTiles = 0, 0
 	for _, m in pairs(Maps) do
@@ -801,6 +1074,10 @@ function ns.SelfTest()
 		for _ in pairs(m.tiles) do nTiles = nTiles + 1 end
 	end
 	Report("data: %d maps, %d tiles, overview %d px per tile (.%s), interface %s", nMaps, nTiles, OverviewPx, ns.OverviewExt or "jpg", tostring((select(4, GetBuildInfo()))))
+	Report("modes: %s; opening here picks %s%s", table.concat(ns.AvailableModes(), ", "), ns.modeNames[openMode] or openMode, auto and " (GPS cannot show you here)" or "")
+	if ns.MapSelfTest then ns.MapSelfTest(Report) end
+	if ns.quests then ns.quests.SelfTest(Report) end
+	if ns.compat then ns.compat.SelfTest(Report) end
 	-- Position and axis order: UnitPosition against the world position Blizzard's map API gives.
 	local X, Y, Z, instanceID = UnitPosition("player")
 	Report("UnitPosition: %s, %s, %s, map %s", tostring(X), tostring(Y), tostring(Z), tostring(instanceID))
@@ -872,7 +1149,10 @@ end
 SLASH_GPS1 = "/gps"
 SlashCmdList.GPS = function(msg)
 	local cmd = strtrim(msg or ""):lower()
-	if cmd == "where" then
+	ns.Log("SLASH", "/gps %s", msg or "")
+	if cmd == "debug" or cmd:match("^debug%s") then
+		ns.DebugCommand(strtrim(msg or ""):match("^%S+%s*(.-)$"))
+	elseif cmd == "where" then
 		local X, Y, Z, instanceID = UnitPosition("player")
 		local mapID, gx, gy, facing = ns.PlayerPosition()
 		print(("|cff33ff99GPS|r: UnitPosition %s, %s, %s, instance %s"):format(tostring(X), tostring(Y), tostring(Z), tostring(instanceID)))
@@ -891,11 +1171,12 @@ SlashCmdList.GPS = function(msg)
 		ns.db[key] = not ns.db[key]
 		print(("|cff33ff99GPS|r: %s %s"):format(key, ns.db[key] and "on" or "off"))
 		if frame:IsShown() then ns.Layout() end
+	elseif cmd == "2d" or cmd == "3d" or cmd == "map" then
+		ns.OpenNamed(cmd == "map" and "Map" or cmd:upper())
 	elseif cmd == "reset" then
-		ns.db.point, ns.db.width, ns.db.height = defaults.point, defaults.width, defaults.height
-		frame:SetSize(ns.db.width, ns.db.height)
-		frame:ClearAllPoints()
-		frame:SetPoint("CENTER")
+		ns.ResetWindow()
+	elseif cmd == "options" or cmd == "settings" or cmd == "config" then
+		ns.OpenSettings()
 	else
 		GPS_Toggle()
 	end

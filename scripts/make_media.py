@@ -5,6 +5,8 @@
 #   CamFollow.tga, CamBehind.tga, CamFree.tga  the camera-mode ring, one per mode (white, tinted
 #               brass or gold with SetVertexColor): Follow, a dot (you) with the view circling it;
 #               Behind, your arrow with the view's cone opening from behind it; Free, four arrows (move).
+#   Map.tga     the mode ring in the traditional map: a folded map, three panels in a zigzag (white,
+#               tinted brass or gold like the camera icons).
 #   Cell.tga    one square of ground: a white outline (black edge) inset by 1/8 of the texture on each
 #               side. GPS3D bends four of these with SetVertexOffset into a 2x2 grid seen the way the
 #               camera sees the ground (turned with the view, in perspective when tilted).
@@ -116,13 +118,21 @@ def cam_free():
             d.polygon([(tipx, tipy), (bx - dy * H, by + dx * H), (bx + dy * H, by - dx * H)], fill=col)
     return outlined(draw)
 
+def folded_map():
+    # three panels, folds alternating; outline and the two fold lines
+    top = [(0.12, 0.27), (0.38, 0.17), (0.62, 0.27), (0.88, 0.17)]
+    bottom = [(x, y + 0.56) for x, y in top]
+    outline = top + bottom[::-1]
+    folds = [(top[1], bottom[1]), (top[2], bottom[2])]
+    return strokes(folds, [outline], black=0.12, white=0.06)
+
 def cell():
     p = 0.125  # inset: the outline's centre line runs at 1/8 and 7/8 of the texture
     # thick strokes: the square is drawn only a few pixels wide in the ring
     return strokes([], [[(p, p), (1 - p, p), (1 - p, 1 - p), (p, 1 - p)]], black=0.24, white=0.13)
 
 os.makedirs(MEDIA, exist_ok=True)
-for name, img in (('Needle', needle()), ('CamFollow', cam_follow()), ('CamBehind', cam_behind()), ('CamFree', cam_free()), ('Cell', cell())):
+for name, img in (('Needle', needle()), ('CamFollow', cam_follow()), ('CamBehind', cam_behind()), ('CamFree', cam_free()), ('Map', folded_map()), ('Cell', cell())):
     write_tga(img, os.path.join(MEDIA, name + '.tga'))
     if os.path.isdir(SANDBOX_UI):
         img.save(os.path.join(SANDBOX_UI, 'media-' + name.lower() + '.png'))

@@ -3,6 +3,8 @@
 #   minimap-background.png        Interface\Minimap\UI-Minimap-Background (dark disc behind a ring)
 #   zoombutton-highlight.png      Interface\Minimap\UI-Minimap-ZoomButton-Highlight (hover glow)
 #   atlas-redbutton-exit[-pressed].png, atlas-redbutton-highlight.png   the red close button atlases
+#   questpoi.png                  Interface\WorldMap\UI-QuestPoi-NumberIcons (the quest button's disc; tinted)
+#   questblob.png                 a quest's objective area (the game draws these itself, QuestPOIFrame)
 # Usage: python make_standins.py
 import os
 from PIL import Image, ImageDraw, ImageFilter
@@ -43,5 +45,17 @@ def redx(state):
         d.line([S * 0.68 + o, S * 0.32 + o, S * 0.32 + o, S * 0.68 + o], fill=col, width=int(w))
     done(im, n, 'atlas-redbutton-exit.png' if state == 'up' else 'atlas-redbutton-exit-pressed.png')
 
-disc(); glow()
+def questpoi():
+    n = 32; im = canvas(n); d = ImageDraw.Draw(im); S = n * K
+    d.ellipse([S * 0.08, S * 0.08, S * 0.92, S * 0.92], fill=(20, 14, 4, 255))
+    d.ellipse([S * 0.15, S * 0.15, S * 0.85, S * 0.85], fill=(255, 255, 255, 255))
+    done(im, n, 'questpoi.png')
+
+def questblob():
+    # transparent margin all round, so a stretched copy shows nothing outside the ellipse
+    n = 128; im = canvas(n); d = ImageDraw.Draw(im); S = n * K
+    d.ellipse([S * 0.04, S * 0.04, S * 0.96, S * 0.96], fill=(240, 200, 60, 70), outline=(255, 215, 80, 200), width=int(S * 0.025))
+    done(im, n, 'questblob.png')
+
+disc(); glow(); questpoi(); questblob()
 redx('up'); redx('pressed'); redx('highlight')

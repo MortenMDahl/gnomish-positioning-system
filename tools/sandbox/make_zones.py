@@ -1,0 +1,109 @@
+# Writes site/zones.lua: the zones of the Eastern Kingdoms and Kalimdor for the sandbox's stand-in of
+# the game's map API (C_Map) and zone texts, so the title, the footer, the traditional map's sheet and
+# GPS's zone lookups cover every zone, not a handful of made-up boxes.
+#
+# Source: MapExplorer's regions.json (https://github.com/coldensjo/ClassicWowMapExplorer, public/spawns):
+# the area of every 33-yard map chunk, read from the game's map files, run-length coded, and the
+# area names and the zone each area belongs to (VMaNGOS world database, patch 1.12, GPL-2.0).
+# Each zone becomes a stand-in uiMap: the game's uiMap ID where it is known (classic zones keep
+# their IDs, 1411 to 1458), else 100000 + its area ID; its rectangle is the box around its chunks (less the outermost 0.3 % on each side).
+# Ironforge and Undercity have no chunks of their own (the cities are buildings on Dun Morogh's and
+# Tirisfal's ground), so they get the rectangles of the classic world map (WorldMapArea).
+# The sea's "zones" (The Great Sea, Shark-Infested Waters) and GM Island are left out, as on the
+# game's map.
+# Usage: python make_zones.py [path or URL of regions.json]
+import json, os, sys, urllib.request
+HERE = os.path.dirname(os.path.abspath(__file__))
+URL = 'https://raw.githubusercontent.com/coldensjo/ClassicWowMapExplorer/HEAD/public/spawns/regions.json'
+TILE = 1600 / 3
+CHUNK = TILE / 16
+UIMAP = {
+    'Durotar': 1411, 'Mulgore': 1412, 'The Barrens': 1413, 'Alterac Mountains': 1416, 'Arathi Highlands': 1417,
+    'Badlands': 1418, 'Blasted Lands': 1419, 'Tirisfal Glades': 1420, 'Silverpine Forest': 1421,
+    'Western Plaguelands': 1422, 'Eastern Plaguelands': 1423, 'Hillsbrad Foothills': 1424, 'The Hinterlands': 1425,
+    'Dun Morogh': 1426, 'Searing Gorge': 1427, 'Burning Steppes': 1428, 'Elwynn Forest': 1429, 'Deadwind Pass': 1430,
+    'Duskwood': 1431, 'Loch Modan': 1432, 'Redridge Mountains': 1433, 'Stranglethorn Vale': 1434,
+    'Swamp of Sorrows': 1435, 'Westfall': 1436, 'Wetlands': 1437, 'Teldrassil': 1438, 'Darkshore': 1439,
+    'Ashenvale': 1440, 'Thousand Needles': 1441, 'Stonetalon Mountains': 1442, 'Desolace': 1443, 'Feralas': 1444,
+    'Dustwallow Marsh': 1445, 'Tanaris': 1446, 'Azshara': 1447, 'Felwood': 1448, "Un'Goro Crater": 1449,
+    'Moonglade': 1450, 'Silithus': 1451, 'Winterspring': 1452, 'Stormwind City': 1453, 'Orgrimmar': 1454,
+    'Ironforge': 1455, 'Thunder Bluff': 1456, 'Darnassus': 1457, 'Undercity': 1458,
+}
+LEFT_OUT = {'The Great Sea', 'Shark-Infested Waters', 'GM Island'}
+# classic WorldMapArea rectangles (top X, bottom X, left Y, right Y) of the two cities without chunks
+CITIES = [('Ironforge', 0, (-4569.2412, -5096.8457, -713.5914, -1504.2164)),
+          ('Undercity', 0, (1877.9453, 1237.8412, 873.1926, -86.1824))]
+
+def main():
+    src = sys.argv[1] if len(sys.argv) > 1 else URL
+    text = urllib.request.urlopen(src).read().decode() if src.startswith('http') else open(src).read()
+    d = json.loads(text)
+    areas = d['areas']
+    zone_of = {int(k): v['zone'] for k, v in areas.items()}
+    # per zone, how many chunks in each column and row; the box leaves out the outermost 0.3 % of its
+    # chunks on each side (a few stray chunks far from a zone would otherwise stretch its box)
+    cols, rows = {}, {}
+    for m in ('0', '1'):
+        runs = d['maps'][m]
+        assert sum(runs[1::2]) == 1024 * 1024, 'chunk count'
+        pos = 0
+        for i in range(0, len(runs), 2):
+            a, n = runs[i], runs[i + 1]
+            z = zone_of.get(a)
+            if a and z:
+                c, r = cols.setdefault((int(m), z), [0] * 1024), rows.setdefault((int(m), z), [0] * 1024)
+                for k in range(pos, pos + n):
+                    cy, cx = divmod(k, 1024)
+                    c[cx] += 1
+                    r[cy] += 1
+            pos += n
+    def span(h):
+        total, cut = sum(h), sum(h) * 0.003
+        lo, acc = 0, 0
+        while acc + h[lo] <= cut: acc += h[lo]; lo += 1
+        hi, acc = 1023, 0
+        while acc + h[hi] <= cut: acc += h[hi]; hi -= 1
+        return lo, hi
+    boxes = {}
+    for key in cols:
+        x0, x1 = span(cols[key]); y0, y1 = span(rows[key])
+        boxes[key] = [x0, y0, x1, y1]
+    zones = []
+    for (m, z), (x0, y0, x1, y1) in sorted(boxes.items()):
+        if str(z) not in areas: continue  # a zone with no entry of its own (its chunks then show no zone)
+        name = areas[str(z)]['name']
+        if name in LEFT_OUT: continue
+        # chunk (cx, cy) covers grid x cx/16 .. (cx+1)/16 (east), y likewise (south); world X north, Y west
+        top, bottom = (32 - y0 / 16) * TILE, (32 - (y1 + 1) / 16) * TILE
+        left, right = (32 - x0 / 16) * TILE, (32 - (x1 + 1) / 16) * TILE
+        zones.append((UIMAP.get(name, 100000 + z), z, name, m, (top, bottom, left, right)))
+    for name, m, box in CITIES:
+        zones.append((UIMAP[name], 0, name, m, box))
+    out = ['-- Generated by tools/sandbox/make_zones.py (see there): the zones of the Eastern Kingdoms and',
+           '-- Kalimdor for the sandbox. Area per 33-yard chunk from the game\'s map files, area names from the',
+           '-- VMaNGOS world database (patch 1.12, GPL-2.0), both via MapExplorer\'s regions.json.',
+           'SANDBOX_ZONES = {',
+           '\tareas = {']
+    for k in sorted(areas, key=int):
+        v = areas[k]
+        if v['map'] in (0, 1):
+            out.append('\t\t[%s] = { %s, %d },' % (k, json.dumps(v['name']), v['zone']))
+    out.append('\t},')
+    out.append('\t-- zones: { uiMapID, zone area (0: none), name, continent, { top X, bottom X, left Y, right Y } }')
+    out.append('\tzones = {')
+    for uid, z, name, m, b in zones:
+        out.append('\t\t{ %d, %d, %s, %d, { %.1f, %.1f, %.1f, %.1f } },' % (uid, z, json.dumps(name), m, *b))
+    out.append('\t},')
+    out.append('\t-- the area of each chunk, row by row (64 x 16 per side), as "area count" pairs')
+    out.append('\truns = {')
+    for m in ('0', '1'):
+        runs = d['maps'][m]
+        out.append('\t\t[%s] = "%s",' % (m, ' '.join(str(v) for v in runs)))
+    out.append('\t},')
+    out.append('}')
+    out.append('if SANDBOX_USEZONES then SANDBOX_USEZONES() end')
+    path = os.path.join(HERE, 'site', 'zones.lua')
+    open(path, 'w').write('\n'.join(out) + '\n')
+    print('wrote', path, len(zones), 'zones,', os.path.getsize(path), 'bytes')
+
+main()

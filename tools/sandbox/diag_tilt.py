@@ -7,9 +7,10 @@ SRC = sys.argv[1] if len(sys.argv) > 1 else f'{SITE}/addons/GPS3D/GPS3D.lua'
 L = lupa54.LuaRuntime(); G = L.globals()
 G.SANDBOX_MEASURE = lambda text, size: len(text) * size * 0.55
 L.execute(open(f'{SITE}/engine.lua').read())
+L.execute(open(f'{SITE}/zones.lua').read())  # every zone of the two continents (make_zones.py)
 toc = open('/mnt/user-data/outputs/GPS3D.toc').read()
 files = [l.strip().replace('\\', '/') for l in toc.splitlines() if l.strip() and not l.startswith('##')]
-for addon, fl in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua']), ('GPS3D', files)]:
+for addon, fl in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'MapWindow.lua']), ('GPS3D', files)]:
     for f in fl:
         src = open(SRC).read() if f == 'GPS3D.lua' else open(f'{SITE}/addons/{addon}/{f}').read()
         if f == 'GPS3D.lua':

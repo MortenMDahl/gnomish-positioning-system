@@ -78,9 +78,16 @@ print = function(...)
 	for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
 	chat(tconcat(parts, " "))
 end
+-- Lua errors go to the error handler (the game's shows them; addons may hook it with seterrorhandler)
+local function defaultHandler(err) chat("|cffff4040Lua error:|r " .. tostring(err)) end
 local function report(err)
-	chat("|cffff4040Lua error:|r " .. tostring(err))
+	local h = S.errorHandler or defaultHandler
+	local ok, e2 = pcall(h, err)
+	if not ok then defaultHandler(err); defaultHandler("in the error handler: " .. tostring(e2)) end
 end
+function seterrorhandler(f) S.errorHandler = f end
+function geterrorhandler() return S.errorHandler or defaultHandler end
+function debugstack(start) return debug.traceback("", (start or 1) + 1) end
 local function call(f, ...)
 	if not f then return end
 	local ok, a, b, c, d = xpcall(f, function(e) return debug.traceback(tostring(e), 2) end, ...)
@@ -125,6 +132,7 @@ local Texture = class("Texture", Region)
 local FontString = class("FontString", Region)
 local Frame = class("Frame", Region)
 local Button = class("Button", Frame)
+local EditBox = class("EditBox", Frame)
 local ModelScene = class("ModelScene", Frame)
 local Actor = class("Actor", Object)
 local function rawget2(t, k) return rawget(t, k) end
@@ -543,6 +551,11 @@ function Frame:Lower() end
 function Frame:SetToplevel() end
 function Frame:EnableMouse(on) self._mouse = not not on end
 function Frame:IsMouseEnabled() return self._mouse end
+-- (the game splits mouse input into clicks and motion; the sandbox keeps one switch for both)
+function Frame:IsMouseClickEnabled() return self._mouse end
+function Frame:IsMouseMotionEnabled() return self._mouse end
+function Frame:SetMouseClickEnabled(on) self._mouse = not not on end
+function Frame:SetMouseMotionEnabled(on) self._mouse = not not on end
 function Frame:SetMouseClickEnabled(on) self._mouse = not not on end
 function Frame:SetMouseMotionEnabled() end
 function Frame:EnableMouseWheel(on) self._wheel = not not on end
@@ -602,9 +615,53 @@ local function applyTemplate(f, template)
 			f.SetBackdropColor = function(self, r, g, b, a) self._bdColor = { r, g, b, a or 1 }; touch() end
 			f.SetBackdropBorderColor = function(self, r, g, b, a) self._bdBorder = { r, g, b, a or 1 }; touch() end
 			f.ApplyBackdrop = function() end
+		elseif t == "MapCanvasFrameScrollContainerTemplate" then
+			S.makeMapScroll(f) -- the stand-in for Blizzard's map (below)
+		elseif t == "POIButtonTemplate" then
+			S.makePOIButton(f) -- the stand-in for Blizzard's quest button (below)
+		elseif S.xmlTemplates and S.xmlTemplates[t] then
+			S.xmlTemplates[t](f) -- templates a test or the page defines (other addons' XML)
 		end
 	end
 end
+
+-- Edit boxes: the text is kept and its first lines drawn; focus and highlight are remembered.
+local EDIT_LINES = 60
+function EditBox:SetMultiLine(v) self._multi = v end
+function EditBox:SetAutoFocus(v) self._autoFocus = v end
+function EditBox:SetMaxLetters(n) self._maxLetters = n end
+function EditBox:SetTextInsets() end
+function EditBox:SetFontObject(f)
+	if not self._fs then self._fs = self:CreateFontString(nil, "ARTWORK"); self._fs:SetPoint("TOPLEFT"); self._fs:SetJustifyH("LEFT") end
+	self._fs:SetFontObject(f)
+end
+function EditBox:SetText(t)
+	self._editText = tostring(t or "")
+	if not self._fs then self:SetFontObject("GameFontHighlightSmall") end
+	local shown, n = {}, 0
+	for line in (self._editText .. "\n"):gmatch("(.-)\n") do
+		n = n + 1
+		if n > EDIT_LINES then break end
+		shown[n] = line
+	end
+	self._fs:SetText(table.concat(shown, "\n"))
+end
+function EditBox:GetText() return self._editText or "" end
+function EditBox:SetFocus() S.focus = self end
+function EditBox:ClearFocus() if S.focus == self then S.focus = nil end end
+function EditBox:HasFocus() return S.focus == self end
+function EditBox:HighlightText(a, b) self._highlight = { a or 0, b or -1 } end
+function EditBox:GetNumLetters() return #(self._editText or "") end
+function Frame:SetScrollChild(child)
+	self._scrollChild = child
+	child:ClearAllPoints()
+	child:SetPoint("TOPLEFT", self, "TOPLEFT", 0, 0)
+end
+function Frame:GetScrollChild() return self._scrollChild end
+function Frame:SetVerticalScroll(v) self._vs = v; touch() end
+function Frame:GetVerticalScroll() return self._vs or 0 end
+function Frame:SetHorizontalScroll(v) self._hs = v; touch() end
+function Frame:GetHorizontalScroll() return self._hs or 0 end
 
 -- Buttons
 function Button:SetNormalTexture(file)
@@ -704,10 +761,46 @@ function ModelScene:Project3DPointTo2D(x, y, z)
 end
 
 function Actor:SetModelByUnit(unit) self._model = "unit:" .. tostring(unit); touch(); return true end
-function Actor:SetModelByFileID(id) self._model = "file:" .. tostring(id); self._fileID = id; touch(); return true end
+-- File models load after S.modelLoadDelay seconds (0 by default). Buildings (WMOs, by GPS3D_API.ModelInfo)
+-- never load while SANDBOX_WMO is false: the case where the game refuses them.
+function Actor:SetModelByFileID(id)
+	self._model = "file:" .. tostring(id); self._fileID = id; self._loadAt = S.time + (S.modelLoadDelay or 0); touch()
+	S.modelLoads = (S.modelLoads or 0) + 1
+	return true
+end
+local infoMemo = {}
+local function modelInfo(id)
+	local m = id and infoMemo[id]
+	if m then return m[1], m[2], m[3], m[4] end
+	local f = rawget(_G, "GPS3D_API") and GPS3D_API.ModelInfo
+	if not (f and id) then return nil end
+	local r, lo, hi, wmo = f(id)
+	if r then infoMemo[id] = { r, lo, hi, wmo } end
+	return r, lo, hi, wmo
+end
 function Actor:SetModelByCreatureDisplayID(id) self._model = "display:" .. tostring(id); touch(); return true end
 function Actor:ClearModel() self._model = nil; self._fileID = nil; touch() end
-function Actor:IsLoaded() return self._model ~= nil end
+function Actor:IsLoaded()
+	if not self._model then return false end
+	if self._fileID then
+		if S.time < (self._loadAt or 0) then return false end
+		local _, _, _, wmo = modelInfo(self._fileID)
+		if wmo and SANDBOX_WMO == false then return false end
+	end
+	return true
+end
+-- Model-space box (Vector3DMixin-like tables); zeros until loaded, as the game's would be.
+function Actor:GetActiveBoundingBox()
+	local r, lo, hi = 0, 0, 0
+	if self:IsLoaded() then
+		if self._fileID then
+			r, lo, hi = modelInfo(self._fileID)
+			if not r then r, lo, hi = 1, 0, 2 end
+		else r, lo, hi = 0.5, 0, 1.8 end
+	end
+	local function v(x, y, z) return { x = x, y = y, z = z, GetXYZ = function(t) return t.x, t.y, t.z end } end
+	return v(-r, -r, lo), v(r, r, hi)
+end
 function Actor:GetModelFileID() return self._fileID end
 function Actor:SetPosition(x, y, z) self._pos = { x, y, z }; touch() end
 function Actor:GetPosition() local p = self._pos; return p[1], p[2], p[3] end
@@ -740,6 +833,7 @@ function CreateFrame(kind, name, parent, template)
 		f._light = { visible = true, dir = { 0, 0, -1 } }
 	end
 	applyTemplate(f, template)
+	if kind == "QuestPOIFrame" then S.makeQuestPOIFrame(f) end
 	if template and template:find("ModelSceneActorTemplate") then return f end
 	return f
 end
@@ -761,11 +855,22 @@ function UnitPosition(unit)
 	return p.X, p.Y, p.Z, p.map
 end
 function GetPlayerFacing() return S.player.facing end
-function GetZoneText() return S.player.zone end
-function GetSubZoneText() return S.player.subzone end
-function GetRealZoneText() return S.player.zone end
-function GetMinimapZoneText() return S.player.subzone ~= "" and S.player.subzone or S.player.zone end
-function IsInInstance() return false end
+-- Zone texts: from the zone data (zones.lua) where it covers your position, else what the host says
+-- (a dungeon, or a map the data does not cover).
+function S.zoneTexts()
+	local p = S.player
+	if p.map ~= nil and p.X and S.zoneAt then
+		local zone, sub = S.zoneAt(p.map, p.X, p.Y)
+		if zone then return zone, sub or "" end
+	end
+	return p.zone, p.subzone
+end
+function GetZoneText() return (S.zoneTexts()) end
+function GetSubZoneText() return select(2, S.zoneTexts()) end
+function GetRealZoneText() return (S.zoneTexts()) end
+function GetMinimapZoneText() local z, sub = S.zoneTexts(); return sub ~= "" and sub or z end
+function SANDBOX_ZONETEXT() local z, sub = S.zoneTexts(); return (z or "") .. "\t" .. (sub or "") end
+function IsInInstance() if S.player.map == nil then return true, "party" end return false, "none" end
 function UnitName() return "Sandbox" end
 function UnitClass() return "Warrior", "WARRIOR" end
 function UnitRace() return "Human", "Human" end
@@ -784,23 +889,657 @@ function InCombatLockdown() return false end
 function IsShiftKeyDown() return false end
 function IsControlKeyDown() return false end
 function IsAltKeyDown() return false end
-function GetAddOnMetadata() return nil end
-C_AddOns = { IsAddOnLoaded = function(n) return S.loadedAddons[n] == true end, GetAddOnMetadata = function() return nil end }
+-- the TOC fields the host passes (SANDBOX_ADDONMETA), else nothing
+S.addonMeta = {}
+function GetAddOnMetadata(addon, key) return S.addonMeta[addon] and S.addonMeta[addon][key] end
+function SANDBOX_ADDONMETA(addon, key, value) S.addonMeta[addon] = S.addonMeta[addon] or {}; S.addonMeta[addon][key] = value end
+C_AddOns = { IsAddOnLoaded = function(n) return S.loadedAddons[n] == true end, GetAddOnMetadata = GetAddOnMetadata }
+function UpdateAddOnMemoryUsage() end
+function GetAddOnMemoryUsage() return 0 end -- unknown here (the game measures each addon)
 IsAddOnLoaded = C_AddOns.IsAddOnLoaded
 S.loadedAddons = {}
 
+-- Mixins and vectors (Blizzard's SharedXML has these)
+function Mixin(object, ...)
+	for i = 1, select("#", ...) do
+		for k, v in pairs((select(i, ...))) do object[k] = v end
+	end
+	return object
+end
+function CreateFromMixins(...) return Mixin({}, ...) end
+-- The game's post-hook: the original runs first and its results are returned; the hook then sees the
+-- same arguments. (Taint, the reason for the "secure" in its name, is not simulated.)
+function hooksecurefunc(t, name, hook)
+	if type(t) == "string" then t, name, hook = _G, t, name end
+	local orig = t[name]
+	assert(type(orig) == "function", "hooksecurefunc: " .. tostring(name) .. " is not a function")
+	t[name] = function(...)
+		local r = table.pack(orig(...))
+		hook(...)
+		return table.unpack(r, 1, r.n)
+	end
+end
+local function vec2(x, y) return { x = x, y = y, GetXY = function(v) return v.x, v.y end } end
+CreateVector2D = vec2
+C_AddOns.LoadAddOn = function() return true end
+
+-- uiMaps, stand-ins for a few of the game's maps (not the game's data): name, parent, and for maps
+-- that lie in the world a box in world yards (top = north X, bottom, left = west Y, right) on a
+-- continent; dungeon floors share a group. Child maps are found by their boxes (or `at`, a box in
+-- the parent's 0..1 coordinates, for the continents on the world map).
+S.uiMaps = {
+	[947] = { name = "Azeroth", parent = 0, mapType = 1 },
+	[1415] = { name = "Eastern Kingdoms", parent = 947, continent = 0, box = { 4800, -15800, 4600, -5800 }, at = { 0.56, 0.12, 0.96, 0.92 } },
+	[1414] = { name = "Kalimdor", parent = 947, continent = 1, box = { 11800, -11800, 3800, -7400 }, at = { 0.04, 0.14, 0.40, 0.90 } },
+	[1453] = { name = "Stormwind City", parent = 1415, continent = 0, box = { -8250, -9150, 1250, 250 } },
+	[1436] = { name = "Westfall", parent = 1415, continent = 0, box = { -9550, -11750, 2300, 250 } },
+	[1429] = { name = "Elwynn Forest", parent = 1415, continent = 0, box = { -8250, -10150, 1050, -1550 } },
+	[1426] = { name = "Dun Morogh", parent = 1415, continent = 0, box = { -4500, -6400, 1300, -1800 } },
+	[1411] = { name = "Durotar", parent = 1414, continent = 1, box = { 1900, -1100, -3800, -5600 } },
+	[291] = { name = "The Deadmines", parent = 1436, group = 1, floor = 1, floorName = "The Deadmines" },
+	[292] = { name = "The Deadmines", parent = 1436, group = 1, floor = 2, floorName = "Ironclad Cove" },
+}
+S.uiMapOrder = { 1453, 1436, 1429, 1426, 1411, 1415, 1414, 947, 291, 292 } -- smallest first
+local function inBox(b, X, Y) return X <= b[1] and X >= b[2] and Y <= b[3] and Y >= b[4] end
+local function toMap(b, X, Y) return (b[3] - Y) / (b[3] - b[4]), (b[1] - X) / (b[1] - b[2]) end
+local function toWorld(b, x, y) return b[1] - y * (b[1] - b[2]), b[3] - x * (b[3] - b[4]) end
+S.uiMapToWorld = toWorld
+S.uiMapFromWorld = toMap
+
 C_Map = {}
-function C_Map.GetBestMapForUnit() return S.player.mapUI end
-function C_Map.GetPlayerMapPosition(ui)
-	if not ui or S.player.mapX == nil then return nil end
-	return { x = S.player.mapX, y = S.player.mapY, GetXY = function(v) return v.x, v.y end }
-end
-function C_Map.GetWorldPosFromMapPos()
+-- The zone you are in (from your position), or what the host says (in a dungeon).
+function C_Map.GetBestMapForUnit(unit)
 	local p = S.player
-	if p.map == nil then return nil end
-	return p.map, { GetXY = function() return p.X, p.Y end }
+	if unit == "player" and p.map ~= nil and p.X and S.mapAt then
+		local id = S.mapAt(p.map, p.X, p.Y)
+		if id then return id end
+	end
+	if unit == "player" and p.map ~= nil and p.X then
+		for _, id in ipairs(S.uiMapOrder) do
+			local m = S.uiMaps[id]
+			if m.box and m.continent == p.map and not m.at and inBox(m.box, p.X, p.Y) then return id end
+		end
+		for _, id in ipairs(S.uiMapOrder) do
+			local m = S.uiMaps[id]
+			if m.box and m.continent == p.map and inBox(m.box, p.X, p.Y) then return id end
+		end
+	end
+	return p.mapUI
 end
-function C_Map.GetMapInfo(id) return { mapID = id, name = S.player.zone } end
+-- Your position on a map: worked out from the map's box; in a dungeon (no world position) what the
+-- host gives for its map.
+function C_Map.GetPlayerMapPosition(ui, unit)
+	local p, m = S.player, S.uiMaps[ui]
+	if not ui then return nil end
+	if p.map ~= nil and p.X and m and m.box then
+		if m.continent ~= p.map then return nil end
+		local x, y = toMap(m.box, p.X, p.Y)
+		return vec2(x, y)
+	end
+	if ui == p.mapUI and p.mapX ~= nil then return vec2(p.mapX, p.mapY) end
+	return nil
+end
+function C_Map.GetWorldPosFromMapPos(ui, pos)
+	local m = S.uiMaps[ui]
+	if not (m and m.box and pos) then return nil end
+	local X, Y = toWorld(m.box, pos.x, pos.y)
+	return m.continent, vec2(X, Y)
+end
+function C_Map.GetMapPosFromWorldPos(continent, pos)
+	local zone = S.mapAt and S.mapAt(continent, pos.x, pos.y)
+	if zone then
+		local x, y = toMap(S.uiMaps[zone].box, pos.x, pos.y)
+		return zone, vec2(x, y)
+	end
+	for _, id in ipairs(S.uiMapOrder) do
+		if S.mapAt and S.uiMaps[id].zoneArea then goto continue end -- zones only through the zone data
+
+		local m = S.uiMaps[id]
+		if m.box and m.continent == continent and inBox(m.box, pos.x, pos.y) then
+			local x, y = toMap(m.box, pos.x, pos.y)
+			return id, vec2(x, y)
+		end
+		::continue::
+	end
+	return nil
+end
+-- map types (Enum.UIMapType): Azeroth a world map, the two continents, dungeon floors; the rest zones
+function S.uiMapType(id)
+	local m = S.uiMaps[id]
+	if not m then return 3 end
+	return m.mapType or (m.group and 4) or (m.continent and m.at and 2) or 3
+end
+function C_Map.GetMapInfo(id)
+	local m = S.uiMaps[id]
+	if not m then return { mapID = id, name = S.player.zone, parentMapID = 0, mapType = 3 } end
+	return { mapID = id, name = m.name, parentMapID = m.parent, mapType = S.uiMapType(id) }
+end
+function C_Map.GetMapChildrenInfo(id, mapType, all)
+	local out = {}
+	local function add(parent)
+		for _, cid in ipairs(S.uiMapOrder) do
+			local c = S.uiMaps[cid]
+			if c.parent == parent then
+				if not mapType or S.uiMapType(cid) == mapType then out[#out + 1] = { mapID = cid, name = c.name, mapType = S.uiMapType(cid), parentMapID = parent } end
+				if all then add(cid) end
+			end
+		end
+	end
+	add(id)
+	return out
+end
+function C_Map.GetMapGroupID(id) local m = S.uiMaps[id]; return m and m.group end
+function C_Map.GetMapGroupMembersInfo(group)
+	local out = {}
+	for id, m in pairs(S.uiMaps) do
+		if m.group == group then out[#out + 1] = { mapID = id, relativeHeightIndex = m.floor, name = m.floorName } end
+	end
+	return out
+end
+function C_Map.GetMapArtLayers() return { { layerWidth = 1002, layerHeight = 668, minScale = 1, maxScale = 1, additionalZoomSteps = 0 } } end
+MapUtil = {}
+function MapUtil.GetDisplayableMapForPlayer() return C_Map.GetBestMapForUnit("player") or 947 end
+
+------------------------------------------------------------------------------------------------
+-- Zones (site/zones.lua, from make_zones.py): every zone of the two continents. The area of each
+-- 33-yard chunk gives the zone and subzone at a point (zone texts, the zone map at a point); each
+-- zone is a stand-in uiMap whose rectangle is the box around its chunks. Loaded after this file
+-- (it calls SANDBOX_USEZONES); without it, the few made-up boxes above stand in.
+------------------------------------------------------------------------------------------------
+function SANDBOX_USEZONES()
+	local Z = SANDBOX_ZONES
+	local TILE = 1600 / 3
+	S.areaRuns = {}
+	for map, str in pairs(Z.runs) do
+		local starts, vals, pos, n = {}, {}, 0, 0
+		for v, c in str:gmatch("(%d+) (%d+)") do
+			n = n + 1
+			starts[n], vals[n] = pos, tonumber(v)
+			pos = pos + tonumber(c)
+		end
+		S.areaRuns[map] = { starts = starts, vals = vals, n = n }
+	end
+	S.zoneUiMap, S.cityMaps = {}, {}
+	for _, z in ipairs(Z.zones) do
+		local id, area, name, map, box = z[1], z[2], z[3], z[4], z[5]
+		local old = S.uiMaps[id]
+		S.uiMaps[id] = { name = name, parent = map == 0 and 1415 or 1414, continent = map, box = box, zoneArea = area ~= 0 and area or nil, city = area == 0 or nil }
+		if old and old.group then S.uiMaps[id].group = old.group end
+		if area ~= 0 then S.zoneUiMap[area] = id else S.cityMaps[#S.cityMaps + 1] = id end
+	end
+	-- smallest first (the zone map at a point is the smallest that holds it), then the rest
+	local order = {}
+	for id, m in pairs(S.uiMaps) do order[#order + 1] = id end
+	local function size(id) local b = S.uiMaps[id].box; return b and (b[1] - b[2]) * (b[3] - b[4]) or math.huge end
+	table.sort(order, function(a, b) local sa, sb = size(a), size(b); if sa ~= sb then return sa < sb end return a < b end)
+	S.uiMapOrder = order
+	-- the area at a world point (0 or nil: none)
+	function S.areaAt(map, X, Y)
+		local r = S.areaRuns[map]
+		if not (r and X and Y) then return nil end
+		local cx, cy = math.floor((32 - Y / TILE) * 16), math.floor((32 - X / TILE) * 16)
+		if cx < 0 or cy < 0 or cx > 1023 or cy > 1023 then return nil end
+		local k = cy * 1024 + cx
+		local lo, hi = 1, r.n
+		while lo < hi do
+			local mid = (lo + hi + 1) // 2
+			if r.starts[mid] <= k then lo = mid else hi = mid - 1 end
+		end
+		local a = r.vals[lo]
+		return a ~= 0 and a or nil
+	end
+	-- zone name and subzone name ("" in the zone itself) at a world point
+	function S.zoneAt(map, X, Y)
+		for _, id in ipairs(S.cityMaps) do
+			local m = S.uiMaps[id]
+			if m.continent == map and inBox(m.box, X, Y) then
+				local a = S.areaAt(map, X, Y)
+				local info = a and Z.areas[a]
+				return m.name, info and info[1] ~= m.name and info[1] or ""
+			end
+		end
+		local a = S.areaAt(map, X, Y)
+		local info = a and Z.areas[a]
+		if not info then return nil end
+		local zone = Z.areas[info[2]]
+		if not (zone and S.zoneUiMap[info[2]]) then return nil end
+		return zone[1], a ~= info[2] and info[1] or ""
+	end
+	-- the zone map (uiMap ID) at a world point, or nil (the sea, or no data)
+	function S.mapAt(map, X, Y)
+		for _, id in ipairs(S.cityMaps) do
+			local m = S.uiMaps[id]
+			if m.continent == map and inBox(m.box, X, Y) then return id end
+		end
+		local a = S.areaAt(map, X, Y)
+		local info = a and Z.areas[a]
+		return info and S.zoneUiMap[info[2]]
+	end
+	S.placeQuests()
+end
+
+------------------------------------------------------------------------------------------------
+-- Quests, stand-ins (not the game's data): a few quests in Elwynn Forest and Westfall with a point
+-- and an objective area (an ellipse, in the zone's 0..1 coordinates of the stand-in uiMaps above),
+-- the quest log calls GPS makes, super-tracking, Blizzard's quest button (POIButtonTemplate: a gold
+-- disc with the quest's number, "?" when complete; click tracks) and the quest-area frame
+-- (QuestPOIFrame: draws the area ellipses of the quests it is asked to, answers the hit-test).
+------------------------------------------------------------------------------------------------
+Enum = Enum or {}
+Enum.UIMapType = { Cosmic = 0, World = 1, Continent = 2, Zone = 3, Dungeon = 4, Micro = 5, Orphan = 6 }
+S.cvars = { questPOI = true }
+function GetCVarBool(name) return S.cvars[name] end
+function GetCVar(name) local v = S.cvars[name]; if v == nil then return nil end return v and "1" or "0" end
+-- point: world X, Y; at: the area's middle (X, Y) and half-sizes in yards (north-south, east-west)
+S.quests = {
+	{ questID = 33, title = "Wolves Across the Border", zone = 1429, point = { -9067, -68 }, objectives = { { "Tough Wolf Meat: 3/8", false } }, at = { -9086, -68, 114, 117 } },
+	{ questID = 7, title = "Kobold Camp Cleanup", zone = 1429, point = { -8839, -302 }, objectives = { { "Kobold Vermin slain: 6/10", false } }, at = { -8839, -328, 66, 78 } },
+	{ questID = 60, title = "Kobold Candles", zone = 1429, point = { -9770, 140 }, objectives = { { "Large Candle: 2/8", false } }, at = { -9789, 140, 76, 91 } },
+	{ questID = 176, title = "Wanted: \"Hogger\"", zone = 1429, point = { -9884, 608 }, objectives = { { "Huge Gnoll Claw: 0/1", false } }, at = { -9903, 634, 57, 78 } },
+	{ questID = 62, title = "The Fargodeep Mine", zone = 1429, point = { -9466, 10 }, objectives = {}, complete = true },
+	{ questID = 65, title = "The Defias Brotherhood", zone = 1436, point = { -10628, 1029 }, objectives = { { "Speak with Gryan Stoutmantle", false } } },
+	{ questID = 38, title = "Westfall Stew", zone = 1436, point = { -10210, 1378 }, objectives = { { "Stringy Vulture Meat: 1/3", false } }, at = { -10232, 1378, 132, 144 } },
+}
+S.questByID = {}
+for i, q in ipairs(S.quests) do q.index = i; S.questByID[q.questID] = q end
+-- each quest's point (x, y) and area (middle x, y, half-sizes) in its zone's 0..1 coordinates
+function S.placeQuests()
+	for _, q in ipairs(S.quests) do
+		local b = S.uiMaps[q.zone].box
+		q.x, q.y = S.uiMapFromWorld(b, q.point[1], q.point[2])
+		if q.at then
+			local ax, ay = S.uiMapFromWorld(b, q.at[1], q.at[2])
+			q.area = { ax, ay, q.at[4] / (b[3] - b[4]), q.at[3] / (b[1] - b[2]) }
+		end
+	end
+end
+S.placeQuests()
+S.superTracked = 33
+S.questStamp = 1
+local function questsChanged(event)
+	S.questStamp = S.questStamp + 1
+	SANDBOX_FIRE(event or "QUEST_LOG_UPDATE")
+end
+C_QuestLog = {}
+function C_QuestLog.GetQuestsOnMap(ui)
+	local out = {}
+	for _, q in ipairs(S.quests) do
+		if q.zone == ui then out[#out + 1] = { questID = q.questID, x = q.x, y = q.y, mapID = ui, numObjectives = #q.objectives, isQuestStart = false, isDaily = false, isCombatAllyQuest = false, isMeta = false, inProgress = not q.complete, isMapIndicatorQuest = false } end
+	end
+	return out
+end
+function C_QuestLog.GetTitleForQuestID(id) local q = S.questByID[id]; return q and q.title end
+function C_QuestLog.GetLogIndexForQuestID(id) local q = S.questByID[id]; return q and q.index end
+function C_QuestLog.GetMaxNumQuests() return 35 end
+function C_QuestLog.GetQuestObjectives(id)
+	local q = S.questByID[id]
+	if not q then return nil end
+	local out = {}
+	for _, o in ipairs(q.objectives) do out[#out + 1] = { text = o[1], type = "monster", finished = o[2] } end
+	return out
+end
+function C_QuestLog.IsComplete(id) local q = S.questByID[id]; return q and q.complete or false end
+function C_QuestLog.AddQuestWatch() end
+function C_QuestLog.RemoveQuestWatch() end
+function GetNumQuestLeaderBoards(index) local q = S.quests[index]; return q and #q.objectives or 0 end
+function GetQuestLogLeaderBoard(i, index)
+	local o = S.quests[index] and S.quests[index].objectives[i]
+	if not o then return nil end
+	return o[1], "monster", o[2]
+end
+C_SuperTrack = {}
+function C_SuperTrack.GetSuperTrackedQuestID() return S.superTracked or 0 end
+function C_SuperTrack.SetSuperTrackedQuestID(id) S.superTracked = id; questsChanged("SUPER_TRACKING_CHANGED") end
+function C_SuperTrack.ClearAllSuperTracked() S.superTracked = nil; questsChanged("SUPER_TRACKING_CHANGED") end
+POIButtonUtil = { Style = { QuestInProgress = 1, QuestComplete = 2, QuestDisabled = 3, Waypoint = 4 } }
+function POIButtonUtil.GetStyle(id) local q = S.questByID[id]; return q and q.complete and 2 or 1 end
+
+-- POIButtonTemplate, a stand-in: a 20 px button with a gold disc and the quest's number
+local POI = {}
+function POI:SetQuestID(id) self.questID = id end
+function POI:GetQuestID() return self.questID end
+function POI:SetSelected(v) self.selected = v and true or false end
+function POI:IsSelected() return self.selected end
+function POI:SetStyle(st) self.style = st end
+function POI:GetStyle() return self.style end
+function POI:EvaluateManagedHighlight() end
+function POI:UpdateButtonStyle()
+	local q = S.questByID[self.questID]
+	self._label:SetText(self.style == 2 and "?" or tostring(q and q.index or ""))
+	local c = self.selected and { 1, 0.82, 0.1 } or { 0.85, 0.7, 0.2 }
+	self._normal:SetVertexColor(c[1], c[2], c[3], 1)
+	self._ring:SetShown(self.selected)
+end
+function S.makePOIButton(f)
+	Mixin(f, POI)
+	f:SetSize(20, 20)
+	f:SetNormalTexture("Interface\\WorldMap\\UI-QuestPoi-NumberIcons")
+	f._ring = f:CreateTexture(nil, "OVERLAY")
+	f._ring:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+	f._ring:SetPoint("CENTER")
+	f._ring:SetSize(30, 30)
+	f._ring:Hide()
+	f._label = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+	f._label:SetPoint("CENTER", f, "CENTER", 0, 0)
+	f._label:SetTextColor(0.12, 0.08, 0.02)
+	f:SetScript("OnClick", function(self, button)
+		if button ~= "LeftButton" then return end
+		if self.selected then C_SuperTrack.ClearAllSuperTracked() else C_SuperTrack.SetSuperTrackedQuestID(self.questID) end
+	end)
+	f:Hide()
+end
+
+-- QuestPOIFrame, a stand-in: each drawn quest's area as an ellipse image placed by texture
+-- coordinates over the whole frame (the frame is the zone's 0..1 rectangle)
+local BLOB = {}
+function BLOB:SetMapID(id) self._mapID = id end
+function BLOB:GetMapID() return self._mapID end
+function BLOB:SetFillTexture() end
+function BLOB:SetBorderTexture() end
+function BLOB:SetFillAlpha() end
+function BLOB:SetBorderAlpha() end
+function BLOB:SetBorderScalar() end
+function BLOB:EnableMerging() end
+function BLOB:EnableSmoothing() end
+function BLOB:SetNumSplinePoints() end
+function BLOB:SetMergeThreshold() end
+function BLOB:DrawNone()
+	for _, t in ipairs(self._blobs) do t:Hide() end
+	self._drawn = {}
+end
+function BLOB:DrawBlob(id, draw)
+	S.blobCalls = (S.blobCalls or 0) + 1
+	local q = S.questByID[id]
+	if not (draw and q and q.area and q.zone == self._mapID) then return end
+	local n = #self._drawn + 1
+	self._drawn[n] = q
+	local t = self._blobs[n]
+	if not t then
+		t = self:CreateTexture(nil, "ARTWORK")
+		t:SetTexture("Interface\\GPSSandbox\\QuestBlob")
+		t:SetAllPoints(self)
+		self._blobs[n] = t
+	end
+	local cx, cy, rx, ry = q.area[1], q.area[2], q.area[3], q.area[4]
+	local l, top = (0 - (cx - rx)) / (2 * rx), (0 - (cy - ry)) / (2 * ry)
+	t:SetTexCoord(l, l + 1 / (2 * rx), top, top + 1 / (2 * ry))
+	t:Show()
+end
+function BLOB:DrawAll() end
+function BLOB:UpdateMouseOverTooltip(x, y)
+	for _, q in ipairs(self._drawn) do
+		local a = q.area
+		local dx, dy = (x - a[1]) / a[3], (y - a[2]) / a[4]
+		if dx * dx + dy * dy <= 1 then return q.questID, #q.objectives end
+	end
+	return nil
+end
+function BLOB:GetNumTooltips() return 0 end
+function S.makeQuestPOIFrame(f)
+	Mixin(f, BLOB)
+	f._blobs, f._drawn = {}, {}
+end
+
+------------------------------------------------------------------------------------------------
+-- Blizzard's map canvas, a stand-in (for GPS's traditional map). Not Blizzard's code or art: the
+-- map is a parchment-coloured sheet with its name, its child maps as boxes (click one to open it,
+-- right-click for the map above), the wheel zooms and a drag pans when zoomed in, and your arrow is
+-- drawn where Blizzard's map would draw it. It takes the calls GPS makes (MapCanvasMixin and the
+-- MapCanvasFrameScrollContainerTemplate scroll frame); Blizzard's real map is checked in the game.
+------------------------------------------------------------------------------------------------
+do
+	local PROVIDER_NAMES = {
+		"MapExplorationDataProviderMixin", "MapHighlightDataProviderMixin", "BattlefieldFlagDataProviderMixin",
+		"VehicleDataProviderMixin", "FogOfWarDataProviderMixin", "DeathMapDataProviderMixin",
+		"ScenarioDataProviderMixin", "VignetteDataProviderMixin", "GossipDataProviderMixin",
+		"FlightPointDataProviderMixin", "PetTamerDataProviderMixin", "DigSiteDataProviderMixin",
+		"DungeonEntranceDataProviderMixin", "MapLinkDataProviderMixin", "SelectableGraveyardDataProviderMixin",
+		"AreaPOIDataProviderMixin", "AreaPOIEventDataProviderMixin", "QuestSessionDataProviderMixin",
+		"EncounterJournalDataProviderMixin", "GroupMembersDataProviderMixin",
+		"QuestOfferDataProviderMixin", "BonusObjectiveDataProviderMixin", "WaypointLocationDataProviderMixin",
+		"SuperTrackWaypointDataProviderMixin",
+	}
+	for _, name in ipairs(PROVIDER_NAMES) do _G[name] = { _name = name, OnAdded = function(self, map) self.owningMap = map end } end
+	-- your quests on the sheet (stand-ins of Blizzard's QuestDataProvider and QuestBlobDataProvider):
+	-- the quest buttons of the map shown, and the tracked quest's area
+	QuestDataProviderMixin = { _name = "QuestDataProviderMixin", OnAdded = function(self, map) self.owningMap = map; self.pins = {} end }
+	function QuestDataProviderMixin:LayoutPins(sc, cw, ch)
+		local n = 0
+		local zone = S.uiMapType(sc.mapID) == 3
+		for _, info in ipairs(zone and C_QuestLog.GetQuestsOnMap(sc.mapID) or {}) do
+			n = n + 1
+			local pin = self.pins[n]
+			if not pin then pin = CreateFrame("Button", nil, sc.Child, "POIButtonTemplate"); self.pins[n] = pin end
+			pin:SetQuestID(info.questID)
+			pin:SetSelected(info.questID == S.superTracked)
+			pin:SetStyle(POIButtonUtil.GetStyle(info.questID))
+			pin:UpdateButtonStyle()
+			pin:SetFrameLevel(sc.Child:GetFrameLevel() + (pin.selected and 3 or 2))
+			pin:ClearAllPoints()
+			pin:SetPoint("CENTER", sc.Child, "TOPLEFT", info.x * cw, -info.y * ch)
+			pin:Show()
+		end
+		for i = n + 1, #self.pins do self.pins[i]:Hide() end
+	end
+	QuestBlobDataProviderMixin = { _name = "QuestBlobDataProviderMixin", OnAdded = function(self, map) self.owningMap = map end }
+	function QuestBlobDataProviderMixin:LayoutPins(sc, cw, ch)
+		local q = S.questByID[S.superTracked or 0]
+		if not self.tex then self.tex = sc.Child:CreateTexture(nil, "ARTWORK", nil, 2); self.tex:SetTexture("Interface\\GPSSandbox\\QuestBlobWhole") end
+		if not (q and q.area and q.zone == sc.mapID) then self.tex:Hide() return end
+		local a = q.area
+		self.tex:ClearAllPoints()
+		self.tex:SetPoint("TOPLEFT", sc.Child, "TOPLEFT", (a[1] - a[3]) * cw, -(a[2] - a[4]) * ch)
+		self.tex:SetSize(2 * a[3] * cw, 2 * a[4] * ch)
+		self.tex:Show()
+	end
+	AreaLabelDataProviderMixin = { _name = "AreaLabelDataProviderMixin", OnAdded = function(self, map) self.owningMap = map end, SetOffsetY = function(self, y) self.offsetY = y end }
+	MapCanvasScrollControllerMixin = {}
+
+	local ZOOM_STEP, ZOOM_MAX = 1.6, 3
+	local PARCHMENT = { 0.80, 0.71, 0.53 }
+
+	local M = {}
+	MapCanvasMixin = M
+	function M:OnLoad()
+		-- Blizzard's OnLoad reaches into the frame's XML children: ScrollContainer (GetCanvas) and
+		-- BorderFrame (EvaluateLockReasons); without them it fails, so the stand-in does too
+		assert(self.ScrollContainer and self.ScrollContainer.Child, "MapCanvasMixin.OnLoad: no ScrollContainer")
+		assert(self.BorderFrame, "MapCanvasMixin.OnLoad: no BorderFrame (EvaluateLockReasons needs it)")
+		self.dataProviders = {}
+		self.pinFrameLevelsManager = { maxLevel = 2000, AddFrameLevel = function(lm, _, range) lm.maxLevel = lm.maxLevel + (range or 1) end }
+		self.flags = {}
+	end
+	function M:GetPinFrameLevelsManager() return self.pinFrameLevelsManager end
+	function M:AddDataProvider(p) self.dataProviders[p] = true; if p.OnAdded then p:OnAdded(self) end end
+	function M:RemoveDataProvider(p) self.dataProviders[p] = nil end
+	function M:SetShouldZoomInOnClick(v) self.flags.zoomOnClick = v end
+	function M:SetShouldPanOnClick(v) self.flags.panOnClick = v end
+	function M:SetShouldNavigateOnClick(v) self.flags.navigate = v end
+	function M:SetShouldZoomInstantly(v) self.flags.instant = v end
+	function M:SetGlobalPinScale(s) self.pinScale = s end
+	function M:SetMapID(id)
+		if self.mapID == id then return end
+		self.mapID = id
+		self.ScrollContainer:SetMapID(id)
+		self:OnMapChanged()
+	end
+	function M:GetMapID() return self.mapID or MapUtil.GetDisplayableMapForPlayer() end
+	function M:OnMapChanged() end
+	function M:OnShow() self.ScrollContainer:Layout() end
+	function M:OnHide() end
+	function M:OnEvent() end
+	function M:OnUpdate()
+		-- the game sends OnSizeChanged to anchored frames when their window is resized; the engine
+		-- does not, so the stand-in notices the size itself
+		local sc = self.ScrollContainer
+		local w, h = sc:GetSize()
+		if w ~= sc._lw or h ~= sc._lh or sc._qs ~= S.questStamp then sc._lw, sc._lh = w, h; sc:Layout() else sc:UpdateArrow() end
+	end
+	function M:OnFrameSizeChanged() self.ScrollContainer:Layout() end
+	function M:ZoomIn() self.ScrollContainer:SetZoom(self.ScrollContainer.zoom + 1) end
+	function M:ZoomOut() self.ScrollContainer:SetZoom(self.ScrollContainer.zoom - 1) end
+	function M:ResetZoom() self.ScrollContainer:SetZoom(0) end
+	function M:IsAtMaxZoom() return self.ScrollContainer.zoom >= ZOOM_MAX end
+	function M:IsAtMinZoom() return self.ScrollContainer.zoom <= 0 end
+	function M:GetCanvasZoomPercent() return self.ScrollContainer.zoom / ZOOM_MAX end
+	function M:PanTo(x, y) local sc = self.ScrollContainer; sc.panX, sc.panY = x, y; sc:Layout() end
+	function M:GetViewRect()
+		local sc = self.ScrollContainer
+		local half = 0.5 / ZOOM_STEP ^ sc.zoom
+		local l, r, t, b = sc.panX - half, sc.panX + half, sc.panY - half, sc.panY + half
+		return { left = l, right = r, top = t, bottom = b, GetCenter = function() return (l + r) / 2, (t + b) / 2 end }
+	end
+	function M:NavigateToParentMap()
+		local info = C_Map.GetMapInfo(self:GetMapID())
+		if info.parentMapID and info.parentMapID > 0 then self:SetMapID(info.parentMapID) end
+	end
+	function M:GetCanvas() return self.ScrollContainer.Child end
+	function M:GetCanvasContainer() return self.ScrollContainer end
+
+	-- the scroll frame: its Child is the map sheet, scaled by the zoom and moved by the pan
+	local SC = {}
+	function SC:SetMapID(id)
+		self.mapID = id
+		self.zoom, self.panX, self.panY = 0, 0.5, 0.5
+		local m = S.uiMaps[id] or { name = C_Map.GetMapInfo(id).name }
+		self.title:SetText(m.name .. (m.floorName and m.floorName ~= m.name and (" - " .. m.floorName) or ""))
+		-- child maps: by `at`, or by their world boxes inside this map's box
+		for _, b in ipairs(self.boxes) do b.tex:Hide(); b.fs:Hide() end
+		local n = 0
+		for _, cid in ipairs(S.uiMapOrder) do
+			local c = S.uiMaps[cid]
+			if c.parent == id then
+				local l, t, r, bt
+				if c.at then l, t, r, bt = c.at[1], c.at[2], c.at[3], c.at[4]
+				elseif c.box and m.box then
+					l, t = toMap(m.box, c.box[1], c.box[3])
+					r, bt = toMap(m.box, c.box[2], c.box[4])
+				end
+				if l then
+					n = n + 1
+					local b = self.boxes[n]
+					if not b then
+						b = { tex = self.Child:CreateTexture(nil, "ARTWORK"), fs = self.Child:CreateFontString(nil, "OVERLAY", "GameFontNormal") }
+						b.tex:SetColorTexture(0.55, 0.45, 0.28, 0.16) -- faint: zone boxes overlap
+						b.fs:SetTextColor(0.25, 0.17, 0.08)
+						self.boxes[n] = b
+					end
+					b.id, b.l, b.t, b.r, b.b = cid, l, t, r, bt
+					b.fs:SetText(c.name)
+					b.tex:Show(); b.fs:Show()
+				end
+			end
+		end
+		self.nBoxes = n
+		self:Layout()
+	end
+	function SC:Layout()
+		local w, h = self:GetSize()
+		if not w or w <= 0 then return end
+		local s = ZOOM_STEP ^ self.zoom
+		local cw, ch = w * s, h * s
+		-- keep the sheet covering the view
+		local half = 0.5 / s
+		self.panX = max(half, min(1 - half, self.panX or 0.5))
+		self.panY = max(half, min(1 - half, self.panY or 0.5))
+		self.Child:ClearAllPoints()
+		self.Child:SetPoint("TOPLEFT", self, "TOPLEFT", w / 2 - self.panX * cw, -(h / 2 - self.panY * ch))
+		self.Child:SetSize(cw, ch)
+		for i = 1, self.nBoxes or 0 do
+			local b = self.boxes[i]
+			b.tex:ClearAllPoints()
+			b.tex:SetPoint("TOPLEFT", self.Child, "TOPLEFT", b.l * cw, -b.t * ch)
+			b.tex:SetSize((b.r - b.l) * cw, (b.b - b.t) * ch)
+			b.fs:ClearAllPoints()
+			b.fs:SetPoint("CENTER", b.tex, "CENTER", 0, 0)
+		end
+		local map = self:GetParent()
+		for p in pairs(map and map.dataProviders or {}) do
+			if p.LayoutPins then p:LayoutPins(self, cw, ch) end
+		end
+		self._qs = S.questStamp
+		self:UpdateArrow()
+	end
+	function SC:SetZoom(z)
+		self.zoom = max(0, min(ZOOM_MAX, z))
+		self:Layout()
+	end
+	function SC:UpdateArrow()
+		local pos = self.mapID and C_Map.GetPlayerMapPosition(self.mapID, "player")
+		if not pos then self.arrow:Hide() return end
+		local cw, ch = self.Child:GetSize()
+		self.arrow:ClearAllPoints()
+		self.arrow:SetPoint("CENTER", self.Child, "TOPLEFT", pos.x * cw, -pos.y * ch)
+		self.arrow:SetRotation(S.player.facing or 0)
+		self.arrow:Show()
+	end
+	-- the child map under the cursor (topmost box), or nil
+	function SC:BoxAt()
+		local l, b, r, t = rect(self.Child)
+		if not l then return nil end
+		local x, y = (S.cx - l) / (r - l), (t - S.cy) / (t - b)
+		-- with the zone data: the zone under the cursor (boxes overlap; the data knows which it is)
+		local m = S.uiMaps[self.mapID]
+		if S.mapAt and m and m.box and m.continent then
+			local X, Y = toWorld(m.box, x, y)
+			local id = S.mapAt(m.continent, X, Y)
+			if id and S.uiMaps[id].parent == self.mapID then return id end
+			return nil
+		end
+		for i = self.nBoxes or 0, 1, -1 do
+			local bx = self.boxes[i]
+			if x >= bx.l and x <= bx.r and y >= bx.t and y <= bx.b then return bx.id end
+		end
+	end
+
+	function S.makeMapScroll(f)
+		Mixin(f, SC)
+		f._clips = true
+		f._mouse = true
+		f._wheel = true
+		f.Child = CreateFrame("Frame", nil, f)
+		local sheet = f.Child:CreateTexture(nil, "BACKGROUND")
+		sheet:SetAllPoints(f.Child)
+		sheet:SetColorTexture(PARCHMENT[1], PARCHMENT[2], PARCHMENT[3], 1)
+		f.title = f.Child:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+		f.title:SetPoint("BOTTOM", f.Child, "BOTTOM", 0, 50)
+		f.title:SetTextColor(0.30, 0.20, 0.08)
+		f.arrow = f.Child:CreateTexture(nil, "OVERLAY")
+		f.arrow:SetTexture("Interface\\Minimap\\MinimapArrow")
+		f.arrow:SetSize(28, 28)
+		f.arrow:Hide()
+		f.boxes, f.nBoxes = {}, 0
+		f.zoom, f.panX, f.panY = 0, 0.5, 0.5
+		f:SetScript("OnMouseDown", function(self, button)
+			self.down = { button = button, x = S.cx, y = S.cy, panX = self.panX, panY = self.panY }
+			self:SetScript("OnUpdate", function()
+				local d = self.down
+				if not d or d.button ~= "LeftButton" then return end
+				local cw, ch = self.Child:GetSize()
+				if self.zoom > 0 and (abs(S.cx - d.x) > 3 or abs(S.cy - d.y) > 3) then
+					d.moved = true
+					self.panX = d.panX - (S.cx - d.x) / cw
+					self.panY = d.panY + (S.cy - d.y) / ch
+					self:Layout()
+				end
+			end)
+		end)
+		f:SetScript("OnMouseUp", function(self, button)
+			local d = self.down
+			self.down = nil
+			self:SetScript("OnUpdate", nil)
+			if not d or d.moved then return end
+			local map = self:GetParent()
+			if button == "RightButton" then
+				map:NavigateToParentMap()
+			elseif map.flags.navigate then
+				local id = self:BoxAt()
+				if id then map:SetMapID(id) end
+			end
+		end)
+		f:SetScript("OnMouseWheel", function(self, delta) self:SetZoom(self.zoom + (delta > 0 and 1 or -1)) end)
+	end
+end
 
 -- Colors
 local ColorMixin = {}
@@ -886,6 +1625,11 @@ do
 	end
 	function tip:ClearLines() for _, fs in ipairs(lines) do fs:Hide() end self._n = 0 end
 	function tip:GetOwner() return self._owner end
+	function tip:GetLines() -- for the tests: the shown lines' text, top to bottom
+		local out = {}
+		for i = 1, self._n or 0 do if lines[i] and lines[i]:IsShown() then out[#out + 1] = lines[i]:GetText() end end
+		return out
+	end
 	function tip:IsOwned(f) return self._owner == f end
 	function GameTooltip_Hide() tip:Hide() end
 end
@@ -1165,10 +1909,29 @@ local function emitScene(sc, clip, alpha)
 	local L = sc._light.dir
 	local faces = {}
 	for _, a in ipairs(sc._actors) do
-		if a._shown and a._model then
+		if a._shown and a._model and a:IsLoaded() then
 			local kind = a._model:match("^unit:") and "unit" or (a._fileID == 189927 and "tree") or "other"
 			local boxes = MODELS[kind]
-			local cyaw, syaw, s = cos(a._yaw), sin(a._yaw), a._scale
+			-- the game's models (GPS3D's data): one box of the model's size, tan for buildings, green for the rest
+			local r, lo, hi, wmo = modelInfo(a._fileID)
+			if r and kind ~= "unit" then
+				local q = r * 0.7
+				if wmo then -- (some of the game's buildings reach far past their walls; the stand-in keeps to 40 yd)
+					q = min(q, 40)
+					boxes = { { -q, -q, lo, q, q, min(hi, lo + 40), 0.72, 0.62, 0.48 } }
+				elseif hi - lo > r then -- tall: a trunk and a crown, like a tree
+					local t, mid, c = max(0.3, r * 0.08), lo + (hi - lo) * 0.45, r * 0.45
+					boxes = { { -t, -t, lo, t, t, mid, 0.36, 0.25, 0.14 }, { -c, -c, mid, c, c, hi, 0.24, 0.48, 0.22 } }
+				else
+					boxes = { { -q, -q, lo, q, q, hi, 0.55, 0.58, 0.50 } }
+				end
+			end
+			-- Rz(yaw) Ry(pitch) Rx(roll), as GPS3D places them
+			local cy_, sy_, cp_, sp_, cr_, sr_ = cos(a._yaw), sin(a._yaw), cos(a._pitch or 0), sin(a._pitch or 0), cos(a._roll or 0), sin(a._roll or 0)
+			local R11, R12, R13 = cy_ * cp_, cy_ * sp_ * sr_ - sy_ * cr_, cy_ * sp_ * cr_ + sy_ * sr_
+			local R21, R22, R23 = sy_ * cp_, sy_ * sp_ * sr_ + cy_ * cr_, sy_ * sp_ * cr_ - cy_ * sr_
+			local R31, R32, R33 = -sp_, cp_ * sr_, cp_ * cr_
+			local s = a._scale
 			local p = a._pos
 			for _, bx in ipairs(boxes) do
 				local wv, sv = {}, {}
@@ -1177,9 +1940,9 @@ local function emitScene(sc, clip, alpha)
 					local mx = (i & 1 == 1) and bx[4] or bx[1]
 					local my = (i & 2 == 2) and bx[5] or bx[2]
 					local mz = (i & 4 == 4) and bx[6] or bx[3]
-					local wx = p[1] + (mx * cyaw - my * syaw) * s
-					local wy = p[2] + (mx * syaw + my * cyaw) * s
-					local wz = p[3] + mz * s
+					local wx = p[1] + (R11 * mx + R12 * my + R13 * mz) * s
+					local wy = p[2] + (R21 * mx + R22 * my + R23 * mz) * s
+					local wz = p[3] + (R31 * mx + R32 * my + R33 * mz) * s
 					local dx, dy, dz = wx - cp[1], wy - cp[2], wz - cp[3]
 					local d = dx * fx + dy * fy + dz * fz
 					if d <= cam.near then ok = false break end
@@ -1484,6 +2247,156 @@ function SANDBOX_SLASH(line)
 		end
 	end
 	chat("|cffff4040Unknown command:|r " .. cmd)
+end
+
+-- The game's Settings panel (Options > AddOns), as far as addons register into it: vertical-layout
+-- categories, proxy settings, checkboxes, sliders, dropdowns, section headers and buttons, with the
+-- argument checks of Blizzard_Settings_Shared (Forever build). The page draws the registered
+-- categories (SANDBOX_SETTINGS) and changes values through them (SANDBOX_SETTING_SET).
+S.settings = { categories = {}, byVar = {}, open = nil }
+Settings = {
+	VarType = { Boolean = "boolean", String = "string", Number = "number" },
+	Default = { True = true, False = false },
+}
+MinimalSliderWithSteppersMixin = { Label = { Left = 1, Right = 2, Top = 3, Min = 4, Max = 5 } }
+local function addInit(category, init)
+	assert(category and category.layout, "not a registered category")
+	tinsert(category.layout.initializers, init)
+	return init
+end
+function Settings.RegisterVerticalLayoutCategory(name)
+	assert(type(name) == "string")
+	local layout = { initializers = {} }
+	function layout:AddInitializer(init) tinsert(self.initializers, init) return init end
+	local category = { name = name, layout = layout, ID = name }
+	function category:GetID() return self.ID end
+	function category:GetName() return self.name end
+	return category, layout
+end
+function Settings.RegisterAddOnCategory(category)
+	assert(category and category.layout)
+	tinsert(S.settings.categories, category)
+end
+function Settings.RegisterProxySetting(category, variable, varType, name, default, getValue, setValue)
+	assert(category and category.layout, "category")
+	assert(type(variable) == "string" and not S.settings.byVar[variable], "variable must be a new string: " .. tostring(variable))
+	assert(varType == "boolean" or varType == "number" or varType == "string", "variable type")
+	assert(type(default) == varType, "default must be a " .. varType .. ": " .. variable)
+	assert(type(getValue) == "function" and type(setValue) == "function", "get and set")
+	local setting = { variable = variable, varType = varType, name = name, default = default }
+	function setting:GetVariable() return self.variable end
+	function setting:GetVariableType() return self.varType end
+	function setting:GetName() return self.name end
+	function setting:GetDefaultValue() return self.default end
+	function setting:GetValue() return getValue() end
+	function setting:SetValue(v)
+		assert(type(v) == self.varType, "value type")
+		setValue(v)
+	end
+	S.settings.byVar[variable] = setting
+	return setting
+end
+function Settings.CreateCheckbox(category, setting, tooltip)
+	assert(setting:GetVariableType() == "boolean")
+	return addInit(category, { kind = "check", setting = setting, tooltip = tooltip })
+end
+function Settings.CreateSliderOptions(minValue, maxValue, rate)
+	local options = { minValue = minValue or 0, maxValue = maxValue or 1, steps = rate and (maxValue - minValue) / rate or 100 }
+	function options:SetLabelFormatter(label, fn) self.formatters = self.formatters or {}; self.formatters[label] = fn end
+	return options
+end
+function Settings.CreateSlider(category, setting, options, tooltip)
+	assert(setting:GetVariableType() == "number" and options ~= nil)
+	return addInit(category, { kind = "slider", setting = setting, options = options, tooltip = tooltip })
+end
+function Settings.CreateControlTextContainer()
+	local c = { data = {} }
+	function c:Add(value, label, tooltip) tinsert(self.data, { value = value, label = label, text = label, tooltip = tooltip }) end
+	function c:GetData() return self.data end
+	return c
+end
+function Settings.CreateDropdown(category, setting, options, tooltip)
+	assert(type(options) == "function")
+	return addInit(category, { kind = "choice", setting = setting, options = options, tooltip = tooltip })
+end
+function Settings.OpenToCategory(id) S.settings.open = id end
+function CreateSettingsListSectionHeaderInitializer(name, tooltip) return { kind = "header", name = name, tooltip = tooltip } end
+function CreateSettingsButtonInitializer(name, buttonText, buttonClick, tooltip, addSearchTags)
+	assert(addSearchTags ~= nil)
+	return { kind = "button", name = name, text = buttonText, click = buttonClick, tooltip = tooltip }
+end
+
+local function json(v)
+	local t = type(v)
+	if t == "nil" then return "null"
+	elseif t == "boolean" then return tostring(v)
+	elseif t == "number" then return rawformat("%.17g", v)
+	elseif t == "string" then
+		return '"' .. v:gsub('[%c"\\]', function(ch) return rawformat("\\u%04x", ch:byte()) end) .. '"'
+	elseif t == "table" then
+		local parts = {}
+		if #v > 0 or next(v) == nil then
+			for i = 1, #v do parts[i] = json(v[i]) end
+			return "[" .. tconcat(parts, ",") .. "]"
+		end
+		for k, val in pairs(v) do parts[#parts + 1] = json(tostring(k)) .. ":" .. json(val) end
+		return "{" .. tconcat(parts, ",") .. "}"
+	end
+	return "null"
+end
+-- The registered AddOns categories with each control's current value, as JSON for the page.
+function SANDBOX_SETTINGS()
+	local out = {}
+	for _, c in ipairs(S.settings.categories) do
+		local controls = {}
+		for _, init in ipairs(c.layout.initializers) do
+			local e = { kind = init.kind, name = init.name, tooltip = init.tooltip, text = init.text }
+			local st = init.setting
+			if st then
+				e.var, e.name, e.value, e.default = st.variable, st.name, st:GetValue(), st.default
+				if init.kind == "choice" then
+					e.options = {}
+					for _, o in ipairs(init.options()) do tinsert(e.options, { value = o.value, label = o.label }) end
+				elseif init.kind == "slider" then
+					local o = init.options
+					e.min, e.max, e.step = o.minValue, o.maxValue, (o.maxValue - o.minValue) / o.steps
+					local fmt = o.formatters and o.formatters[MinimalSliderWithSteppersMixin.Label.Right]
+					e.label = fmt and fmt(e.value) or tostring(e.value)
+				end
+			end
+			tinsert(controls, e)
+		end
+		tinsert(out, { id = c.ID, name = c.name, controls = controls })
+	end
+	return json(out)
+end
+-- Changes a setting as the panel would (value as text from the page), or clicks the n-th button.
+function SANDBOX_SETTING_SET(variable, value)
+	local st = S.settings.byVar[variable]
+	if not st then return end
+	if st.varType == "boolean" then value = value == "true" or value == true
+	elseif st.varType == "number" then value = tonumber(value) end
+	call(st.SetValue, st, value)
+end
+function SANDBOX_SETTING_CLICK(categoryID, index)
+	for _, c in ipairs(S.settings.categories) do
+		if c.ID == categoryID then
+			local init = c.layout.initializers[index]
+			if init and init.kind == "button" then call(init.click) end
+		end
+	end
+end
+-- The debug log (GPS's GnomishPositioningSystemLog) for the page: "1" or "0" (on), then its lines.
+function SANDBOX_DEBUGLOG()
+	local l = GnomishPositioningSystemLog
+	if not l then return "0\n" end
+	return (l.on and "1" or "0") .. "\n" .. table.concat(l.lines or {}, "\n")
+end
+-- The category /gps options asked for, once (nil: none).
+function SANDBOX_SETTINGS_TAKEOPEN()
+	local id = S.settings.open
+	S.settings.open = nil
+	return id
 end
 
 -- Loads one addon file in the addon's namespace.

@@ -1,5 +1,5 @@
 -- GPS 3D: the whole game world in perspective, as GPS's 3D view. It shares GPS's look
--- (GPS_API.ApplyChrome) and switches with the 2D map at the same place and size.
+-- (GPS_API.ApplyChrome) and switches with the 2D map and the traditional map at the same place and size.
 --
 -- Terrain: Data/World_*.lua hold, for every ADT tile of every map with terrain, a 33 x 33 grid of
 -- heights (16.7 yards apart; ground or water surface, whichever is higher). Around the camera the
@@ -13,7 +13,7 @@
 -- Buildings: Data/Detail_*.lua hold, for every tile with buildings, meshes of 66.7-yard blocks with
 -- the buildings raised into the ground (walls coloured like their texture). Blocks near the view's
 -- centre are drawn on top of the grid, nearest first, within a triangle budget; the grid stays under
--- them so the seams never show the sky.
+-- them so the seams never show the background.
 --
 -- You: an arrow lying on the ground under you, drawn in the same perspective as the terrain, and
 -- your own character model standing on it (ModelScene, same camera).
@@ -25,12 +25,13 @@
 --   Behind   you stay in the middle and the view turns with you, looking the way you face
 -- In every mode: right drag turns and tilts (45 degrees from straight down at most), the
 -- wheel zooms, double-click flies to a spot (Free), the compass ring turns back to north, and the
--- ring under it (a grid seen from above, or in perspective) locks the view straight down or frees the tilt. Left drag while following switches to Free.
+-- bottom ring (a grid seen from above, or in perspective) locks the view straight down or frees the tilt. Left drag while following switches to Free.
 --
 -- World coordinates here: x east, y north, h up, in yards; x = gx * TILE, y = -gy * TILE on the
 -- ADT grid (gx east, gy south), so tile (tx, ty) covers x in [tx, tx+1] * TILE, y in [-(ty+1), -ty] * TILE.
 local addonName, ns = ...
 local GPS = GPS_API
+if not GPS.Log then GPS.Log, GPS.DebugOn = function() end, function() return false end end -- an older GPS: no debug log
 
 local TILE = 1600 / 3
 local GRID = 33                    -- heights per tile side
@@ -101,10 +102,14 @@ canvas:SetClipsChildren(true)
 canvas:EnableMouse(true)
 ns.canvas = canvas
 
-local sky = canvas:CreateTexture(nil, "BACKGROUND", nil, -8)
-sky:SetAllPoints()
-sky:SetTexture("Interface\\Buttons\\WHITE8X8")
-sky:SetGradient("VERTICAL", CreateColor(0.78, 0.83, 0.86, 1), CreateColor(0.37, 0.50, 0.65, 1))
+-- Behind the terrain: open sea in the colour of the game's minimap images (GPS's colors.sea, the 2D
+-- map's background too), so the world past a map's last tiles looks like more sea. The view never
+-- tilts above 45 degrees from straight down and sees 25 degrees either side of its middle, so the
+-- horizon is never in view and there is no sky to draw (until 2026-10-17 this was a sky gradient,
+-- which made the sea turn pale blue where the map's tiles ended).
+local sea = canvas:CreateTexture(nil, "BACKGROUND", nil, -8)
+sea:SetAllPoints()
+sea:SetColorTexture(GPS.colors.sea[1], GPS.colors.sea[2], GPS.colors.sea[3], 1)
 
 -- Terrain: frames stacked by frame level, each holding 64 draw-order buckets.
 local bucketFrames = {}
@@ -144,21 +149,27 @@ local function NewActor()
 	if not ok or not actor then ok, actor = pcall(scene.CreateActor, scene, nil, "ModelSceneActorTemplate") end
 	return ok and actor or nil
 end
+ns.NewActor, ns.frame, ns.TILE, ns.BLOCK = NewActor, frame, TILE, BLOCK
 
-local ui = GPS.ApplyChrome(frame, canvas, { mode = "3D" })
+-- after a move or resize, its place and size become the saved one (GPS keeps it for every mode)
+local ui = GPS.ApplyChrome(frame, canvas, {
+	mode = "3D",
+	onMoved = function() if GPS.SaveGeometry then GPS.SaveGeometry(frame) end end,
+	onSized = function() if GPS.SaveGeometry then GPS.SaveGeometry(frame) end end,
+})
 ns.ui = ui
 ui.prev:Hide()
 ui.next:Hide()
 ui.subtitle:ClearAllPoints()
 ui.subtitle:SetPoint("TOPLEFT", 10, -28)
 
--- The rings down the right edge (GPS's look): compass, straight down / tilted, 2D/3D, camera mode, Me.
--- (Lua 5.1 allows 200 local variables in the main chunk and this file is close: the helpers below
--- live in blocks or on the buttons.)
--- Compass: a needle pointing north (turned with the view); click to turn north up.
-local compass = GPS.RingButton(ui.chrome, { "Compass", "Click: turn north up" })
-compass:SetIcon(GPS.MEDIA .. "Needle", 0.72)
-compass.icon:SetVertexColor(1, 1, 1) -- the needle keeps its own red and grey
+-- The rings down the right edge (GPS's look): compass, mode (3D), Me, as in every GPS window and at
+-- the same places (so switching modes keeps them under the mouse), then camera mode and straight
+-- down / tilted. (Lua 5.1 allows 200 local variables in the main chunk and this file is close: the
+-- helpers below live in blocks or on the buttons.)
+-- Compass (GPS's, from ApplyChrome): here the needle turns with the view; click to turn north up.
+local compass = ui.compass
+compass.tooltip = { "Compass", "Click: turn north up" }
 ns.compass = compass
 
 -- Straight down or tilted: the ring shows a little 2x2 grid of ground the way the camera sees it,
@@ -205,7 +216,7 @@ camButton:SetIcon(camButton.icons.free, 0.62)
 ns.camButton = camButton
 
 ui.me.tooltip = { "Me", "Centre on you and follow (Follow or Behind, as you last chose)" }
-ui.SetRings({ compass, topButton, ui.modeSwitch, camButton, ui.me })
+ui.SetRings({ compass, ui.modeSwitch, ui.me, camButton, topButton })
 
 ------------------------------------------------------------------------------------------------
 -- World data: heights per tile, decoded when first needed
@@ -217,30 +228,46 @@ do
 	for i = 1, 64 do B64[chars:byte(i)] = i - 1 end
 end
 
-local heightCache = {} -- map * 4096 + key -> heights (1-based, row by row from the north-west) or false
-local function TileHeights(map, tx, ty)
-	if tx < 0 or tx > 63 or ty < 0 or ty > 63 then return nil end
-	local key = ty * 64 + tx
-	local ck = map * 4096 + key
-	local h = heightCache[ck]
-	if h ~= nil then return h or nil end
-	local m = ns.World[map]
-	local s = m and m[key]
-	if not s then heightCache[ck] = false return nil end
-	local b1, b2, b3 = s:byte(1, 3)
-	local base = ((B64[b1] * 64 + B64[b2]) * 64 + B64[b3]) - 131072
-	h = {}
-	local lo, hi = math.huge, -math.huge
-	for i = 1, GRID * GRID do
-		local a, b = s:byte(i * 2 + 2, i * 2 + 3)
-		local v = (base + B64[a] * 64 + B64[b]) * 0.5
-		h[i] = v
-		if v < lo then lo = v end
-		if v > hi then hi = v end
+-- A tile's heights: h[i] (1-based, row by row from the north-west) is read from the tile's string when
+-- asked for, nothing is decoded in advance; h.lo and h.hi are its lowest and highest height. The
+-- string is a 3-character base (the lowest height), 33 x 33 heights of 2 characters, and, since
+-- 2026-10-17, 2 characters for the highest (build_world.py); older strings are scanned once for it.
+-- (Until then every tile in view was decoded into a table and kept: zoomed out over a continent that
+-- was about 90-160 ms in one frame and 20-30 MB that stayed.)
+local heightCache = {} -- map * 4096 + key -> { s, base, lo, hi } with the heights behind __index, or false
+local TileHeights
+do
+	local FULL = 3 + GRID * GRID * 2
+	local heightsOf = { __index = function(t, i)
+		local a, b = t.s:byte(i * 2 + 2, i * 2 + 3)
+		return (t.base + B64[a] * 64 + B64[b]) * 0.5
+	end }
+	function TileHeights(map, tx, ty)
+		if tx < 0 or tx > 63 or ty < 0 or ty > 63 then return nil end
+		local key = ty * 64 + tx
+		local ck = map * 4096 + key
+		local h = heightCache[ck]
+		if h ~= nil then return h or nil end
+		local m = ns.World[map]
+		local s = m and m[key]
+		if not s then heightCache[ck] = false return nil end
+		local b1, b2, b3 = s:byte(1, 3)
+		local base = ((B64[b1] * 64 + B64[b2]) * 64 + B64[b3]) - 131072
+		local top = 0 -- highest height above the base
+		if #s >= FULL + 2 then
+			local c1, c2 = s:byte(FULL + 1, FULL + 2)
+			top = B64[c1] * 64 + B64[c2]
+		else
+			for i = 1, GRID * GRID do
+				local a, b = s:byte(i * 2 + 2, i * 2 + 3)
+				local d = B64[a] * 64 + B64[b]
+				if d > top then top = d end
+			end
+		end
+		h = setmetatable({ s = s, base = base, lo = base * 0.5, hi = (base + top) * 0.5 }, heightsOf)
+		heightCache[ck] = h
+		return h
 	end
-	h.lo, h.hi = lo, hi
-	heightCache[ck] = h
-	return h
 end
 ns.TileHeights = TileHeights
 
@@ -280,6 +307,8 @@ local function GridHeight(map, x, y)
 	if u >= v then return h00 + (h10 - h00) * u + (h11 - h10) * v end
 	return h00 + (h11 - h01) * u + (h01 - h00) * v
 end
+
+ns.GridHeight = GridHeight
 
 -- Image for a tile: its minimap (by FileDataID) or its square of the overview atlas.
 local function MinimapFile(map, tx, ty)
@@ -712,8 +741,9 @@ local function ReadPlayer()
 		map, x, y = 0, FAKE_X + FAKE_R * cos(a), FAKE_Y + FAKE_R * sin(a)
 		facing = a -- moving counter-clockwise: heading = angle (0 = north)
 	else
-		local X, Y, Z, m = UnitPosition("player")
-		if not (Usable(X) and Usable(Y) and Usable(m)) then
+		-- GPS's own reading (GPS_API.PlayerPosition): one rule for both views, swapaxes and flipfacing included
+		local m, gx, gy, f, Z = GPS.PlayerPosition()
+		if not m then
 			local changed = player.on or player.why ~= "nopos"
 			player.on, player.why = false, "nopos"
 			return changed
@@ -723,13 +753,9 @@ local function ReadPlayer()
 			player.on, player.why, player.map = false, "nodata", m
 			return changed
 		end
-		local db = GnomishPositioningSystemDB
-		if db and db.swapAxes then X, Y = Y, X end
 		map = m
-		x, y = (32 - Y / TILE) * TILE, -(32 - X / TILE) * TILE
-		facing = GetPlayerFacing and GetPlayerFacing()
-		if not Usable(facing) then facing = player.facing end
-		if db and db.flipFacing then facing = -facing end
+		x, y = gx * TILE, -gy * TILE
+		facing = f or player.facing
 		if Usable(Z) and Z ~= 0 then z = Z end
 	end
 	if map ~= player.map or not player.hx or abs(x - player.hx) > 0.5 or abs(y - player.hy) > 0.5 then
@@ -763,6 +789,7 @@ local function Focal()
 	local _, h = canvas:GetSize()
 	return (h / 2) / math.tan((cam.fov or FOV) / 2)
 end
+ns.Focal = Focal
 
 -- Height: the camera keeps the altitude you gave it (panning over a mountain does not raise it);
 -- cam.th is the height of the orbit point, the camera sits cam.dist away from it along the view.
@@ -918,7 +945,7 @@ local frameNo = 0
 local VO_EPS = 0.25 -- a vertex that moved less than this many pixels keeps the screen position last sent
 local NOFIXED = {}  -- building meshes: every vertex may keep its position
 local TOTAL_BUCKETS = BUCKET_FRAMES * LAYER_BUCKETS
-local SetVertexOffset = sky.SetVertexOffset -- the method itself: no lookup per call
+local SetVertexOffset = sea.SetVertexOffset -- the method itself: no lookup per call
 local sort, HUGE = table.sort, math.huge
 
 -- A triangle crossing the near plane is cut CLIP_D in front of the camera and its front part drawn
@@ -1133,7 +1160,8 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 						local y1 = ty0 - floor(bi / BLOCKS) * BLOCK
 						local nx, ny = min(x0 + BLOCK, max(x0, camx)), min(y1, max(y1 - BLOCK, camy))
 						local d = sqrt((nx - camx) ^ 2 + (ny - camy) ^ 2)
-						if d < DETAIL_RANGE then
+						-- (where the game's own buildings are shown, Models.lua, the block is left out)
+						if d < DETAIL_RANGE and not (ns.ModelsCover and ns.ModelsCover(x0, y1)) then
 							nBlocks = nBlocks + 1
 							local e = bpool[nBlocks]
 							if not e then e = {}; bpool[nBlocks] = e end
@@ -1441,8 +1469,9 @@ end
 
 local titleText, subtitleMap
 local function UpdateTitle()
-	local onMap = player.on and player.map == cam.map and not ns.fake
-	local zone = onMap and GetZoneText and GetZoneText() or nil
+	-- the zone in the middle of the view (GPS's ZoneNameAt), else where you are, else the map
+	local zone = GPS.ZoneNameAt and GPS.ZoneNameAt(cam.map, cam.x / TILE, -cam.y / TILE)
+	if not zone and Following() and player.on and player.map == cam.map and not ns.fake and GetZoneText then zone = GetZoneText() end
 	local text = (zone and zone ~= "") and zone or MapName(cam.map)
 	if text ~= titleText then ui.title:SetText(text); titleText = text end
 	if cam.map ~= subtitleMap then ui.subtitle:SetText(MapName(cam.map)); subtitleMap = cam.map end
@@ -1478,13 +1507,21 @@ local function Render()
 	scene:SetCameraPosition(cx, cy, cz)
 	scene:SetCameraOrientationByYawPitchRoll(rad(90 - cam.yaw), rad(min(cam.pitch, 89.9)), 0)
 	scene:SetCameraFieldOfView(cam.fov or FOV)
+	if ns.UpdateModels then ns.UpdateModels(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz) end -- the game's models (Models.lua)
 	for _, a in ipairs(actors) do
 		if a.map == cam.map then a.actor:SetPosition(a.x, a.y, a.h); a.actor:Show() else a.actor:Hide() end
 	end
 	UpdateMarker()
+	if ns.UpdateQuestPins then ns.UpdateQuestPins() end
+	if ns.UpdateAddonPins then ns.UpdateAddonPins() end -- other addons' markers (GPS's Compat.lua)
 	UpdateCompass()
 	UpdateTitle()
 	stats.ms = debugprofilestop() - t0
+	local p = ns.perf -- the debug log's frame-time sums (GPS3D_API.TakePerf)
+	if p then
+		p.n, p.sum, p.tris = p.n + 1, p.sum + stats.ms, p.tris + stats.tris + stats.detailTris
+		if stats.ms > p.max then p.max = stats.ms end
+	end
 end
 ns.Render = Render
 
@@ -1505,6 +1542,7 @@ local function ShortYaw(from, to) return from + ((to - from + 540) % 360 - 180) 
 local function BehindYaw() return (-deg(player.facing) + yawOffset) % 360 end
 
 local function SetCamMode(mode)
+	if mode ~= camMode then GPS.Log("3D", "camera %s -> %s", tostring(camMode), mode) end
 	camMode = mode
 	camButton:SetIcon(camButton.icons[mode], 0.62)
 	camButton:SetActive(mode ~= "free") -- gold while locked onto you
@@ -1530,6 +1568,7 @@ ns.FlyTo = FlyTo
 
 -- Locks the view straight down, or gives back the tilt it had before.
 local function SetTopDown(on, instant)
+	if (on and true or false) ~= topDown then GPS.Log("3D", "straight down %s", tostring(on and true or false)) end
 	topDown = on and true or false
 	topButton:SetActive(topDown)
 	GPS3D_DB = GPS3D_DB or {}
@@ -1565,6 +1604,7 @@ end
 -- Puts the view on another map (camera jumps; no flight between maps).
 local function SetMap(map, x, y)
 	if cam.map ~= map then
+		GPS.Log("3D", "view map %s -> %s (%s)", tostring(cam.map), tostring(map), MapName(map))
 		cam.map = map
 		anim = nil
 	end
@@ -1579,6 +1619,7 @@ local function FollowMe(mode)
 	mode = mode or (camMode ~= "free" and camMode) or (GPS3D_DB and GPS3D_DB.camMode) or "follow"
 	ReadPlayer()
 	if not player.on then
+		GPS.Log("3D", "Me: cannot follow you (%s, map %s)", tostring(player.why), tostring(player.map))
 		SetCamMode("free")
 		if player.why == "nodata" then
 			print(("|cff55ff55GPS3D|r: no 3D terrain for %s"):format(MapName(player.map)))
@@ -1774,17 +1815,20 @@ end
 ns.FollowStep = FollowStep
 
 -- One update loop: drags, flights, following you, re-rendering only when something changed.
-local sinceRead = 0
+local sinceRead = 0 -- seconds since the footer was last updated
 frame:SetScript("OnUpdate", function(_, elapsed)
 	local dirty, moved = DragUpdate(), false
 	if ns.fake then ns.fake.angle = (ns.fake.angle + elapsed * 0.25) % (2 * math.pi) end
+	-- your position every frame (following moves smoothly); the footer's text 5 times a second, and at
+	-- once when your position comes or goes (no position here, no 3D terrain here)
+	if ReadPlayer() then
+		moved = true
+		if player.why ~= ns.footerWhy then ns.footerWhy = player.why; sinceRead = 1 end
+	end
 	sinceRead = sinceRead + elapsed
-	if sinceRead >= 0.03 then
+	if sinceRead >= 0.2 then
 		sinceRead = 0
-		if ReadPlayer() then
-			moved = true
-			UpdateFooter()
-		end
+		UpdateFooter()
 	end
 	if FollowStep(elapsed) then dirty = true end
 	if StepAnimation(elapsed) then dirty = true end
@@ -1804,6 +1848,7 @@ local function Open()
 	markerMode = GPS3D_DB.marker or markerMode
 	if GPS3D_DB.detail ~= nil then useDetail = GPS3D_DB.detail end
 	if GPS3D_DB.buildings then DETAIL_BUDGET = GPS3D_DB.buildings end
+	if GPS3D_DB.grid then TRI_BUDGET = GPS3D_DB.grid end
 	anim = nil
 	cam.pitch = max(MIN_PITCH, min(MAX_PITCH, cam.pitch))
 	if GPS3D_DB.topDown ~= false then SetTopDown(true, true) else topButton:SetActive(false) end -- straight down unless turned off
@@ -1831,18 +1876,25 @@ end
 
 frame:SetScript("OnShow", function() Open() end)
 
-ui.modeSwitch:SetScript("OnClick", function()
-	-- back to 2D at the same place and size, looking where the 3D view looks
-	GPS.Show(frame, not Following() and { map = cam.map, gx = cam.x / TILE, gy = -cam.y / TILE } or nil)
-	frame:Hide()
-end)
-
+-- The mode ring (GPS's ApplyChrome) steps to the next mode, the traditional map, or back to the 2D
+-- map with a right-click, at the same place and size, looking where the 3D view looks (Focus).
 GPS3D_API = {
 	-- from: a window whose place and size to take; focus: { map, gx, gy } to look at (nil: follow you)
 	Show = function(from, focus)
 		if from and GPS.CopyGeometry then GPS.CopyGeometry(frame, from) end
 		pendingFocus = focus
 		if frame:IsShown() then Open() else frame:Show() end
+	end,
+	-- open the 3D window the way the mode ring does (in place of the window that is open, at its place
+	-- and size, remembered as your mode): /gps3d and its test commands
+	Open = function()
+		if frame:IsShown() then return end
+		if not (GPS.OpenNamed and GPS.OpenNamed("3D")) then frame:Show() end
+	end,
+	-- where the view looks, for the other modes: nil while it is locked onto you
+	Focus = function()
+		if Following() then return nil end
+		return { map = cam.map, gx = cam.x / TILE, gy = -cam.y / TILE }
 	end,
 	frame = frame,
 }
@@ -1875,11 +1927,13 @@ end
 -- Self-test: prints a report to copy back (see TESTING.md)
 ------------------------------------------------------------------------------------------------
 local function Report(fmt, ...)
-	print("|cff55ff55GPS3D test|r " .. fmt:format(...))
+	local text = fmt:format(...)
+	print("|cff55ff55GPS3D test|r " .. text)
+	GPS.Log("TEST", "3D %s", text)
 end
 
 local function SelfTest()
-	frame:Show()
+	GPS3D_API.Open()
 	local nMaps, nTiles = 0, 0
 	for _, m in pairs(ns.World) do
 		nMaps = nMaps + 1
@@ -1930,7 +1984,8 @@ local function SelfTest()
 		Report("scene forward unavailable")
 	end
 	Report("scene fov %s (we set %.3f)", tostring(scene:GetCameraFieldOfView()), cam.fov or FOV)
-	C_Timer.After(2, function()
+	if ns.ModelsSelfTest then ns.ModelsSelfTest(Report) end -- the game's models: data, and whether buildings (WMOs) load
+	C_Timer.After(3, function()
 		local loaded, checked, files = 0, 0, {}
 		for _, t in ipairs(stats.visible) do
 			local f = t.tex.file
@@ -1944,9 +1999,194 @@ local function SelfTest()
 		local icons = (compass.icon:IsObjectLoaded() and 1 or 0) + (camButton.icon:IsObjectLoaded() and 1 or 0) + (topButton.cells[1]:IsObjectLoaded() and 1 or 0)
 		Report("icons: %d of 3 (compass needle, camera mode, grid square from Media\\) loaded", icons)
 		Report("marker (%s): arrow %s, character model %s; camera %s", markerMode, decal:IsShown() and "shown" or "hidden", playerActor and ("loaded=" .. tostring((playerActor:IsLoaded()))) or "not created", camMode)
+		if ns.ModelsSelfTestLate then ns.ModelsSelfTestLate(Report) end
 		Report("done")
 	end)
 end
+
+------------------------------------------------------------------------------------------------
+-- Your quests (GPS's Quests.lua finds them; the same markers as the 2D map): each at its point on
+-- the ground, projected like your marker, redrawn with the view. On ns: this chunk is at Lua 5.1's
+-- limit of locals.
+------------------------------------------------------------------------------------------------
+ns.questLayer = CreateFrame("Frame", nil, canvas)
+ns.questLayer:SetAllPoints(canvas)
+ns.questLayer:SetFrameLevel(canvas:GetFrameLevel() + BUCKET_FRAMES + 5) -- over the ground, the arrow and models
+ns.questPins = {}
+ns.UpdateQuestPins = function()
+	local pins, n = ns.questPins, 0
+	local list = GPS.QuestList and frame:IsShown() and GPS.QuestList(cam.map)
+	if list then
+		local stamp = GPS.QuestStamp()
+		local hw, hh = canvas:GetWidth() / 2 + 16, canvas:GetHeight() / 2 + 16
+		for _, q in ipairs(list) do
+			local x, y = q.gx * TILE, -q.gy * TILE
+			if q.h3d == nil then q.h3d = GroundHeight(cam.map, x, y) end -- q is rebuilt when quests change
+			local sx, sy = Project(x, y, q.h3d)
+			if sx and abs(sx) < hw and abs(sy) < hh then
+				n = n + 1
+				local pin = pins[n]
+				if not pin then pin = GPS.NewQuestPin(ns.questLayer); pins[n] = pin end
+				if pin.gpsQ ~= q or pin.gpsStamp ~= stamp then
+					GPS.SetupQuestPin(pin, q)
+					pin:SetFrameLevel(ns.questLayer:GetFrameLevel() + (q.tracked and 2 or 1))
+					pin.gpsQ, pin.gpsStamp = q, stamp
+				end
+				pin:ClearAllPoints()
+				pin:SetPoint("CENTER", canvas, "CENTER", sx, sy)
+				pin:Show()
+			end
+		end
+	end
+	for i = n + 1, #pins do pins[i]:Hide() end
+end
+GPS3D_API.QuestsChanged = function() if frame:IsShown() then Render() end end
+
+-- Other addons' markers (GatherMate2's nodes, from GPS's Compat.lua): on the ground like your
+-- quests, within ADDON_RANGE yards of the middle of the view, while the camera is closer than
+-- ADDON_DIST, at most ADDON_MAX; under the quest markers.
+ns.addonLayer = CreateFrame("Frame", nil, canvas)
+ns.addonLayer:SetAllPoints(canvas)
+ns.addonLayer:SetFrameLevel(canvas:GetFrameLevel() + BUCKET_FRAMES + 4)
+ns.addonPins = {}
+ns.ADDON_RANGE, ns.ADDON_DIST, ns.ADDON_MAX = 700, 2000, 400
+ns.UpdateAddonPins = function()
+	local pins, n = ns.addonPins, 0
+	local list, byTile, stamp
+	if GPS.AddonNodes and frame:IsShown() and cam.dist < ns.ADDON_DIST then list, byTile, stamp = GPS.AddonNodes(cam.map) end
+	if byTile then
+		local R = ns.ADDON_RANGE
+		local hw, hh = canvas:GetWidth() / 2 + 10, canvas:GetHeight() / 2 + 10
+		local gx0, gx1 = floor((cam.x - R) / TILE), floor((cam.x + R) / TILE)
+		local gy0, gy1 = floor(-(cam.y + R) / TILE), floor(-(cam.y - R) / TILE)
+		for ty = gy0, gy1 do
+			for tx = gx0, gx1 do
+				local b = byTile[ty * 64 + tx]
+				if b then
+					for _, node in ipairs(b) do
+						if n >= ns.ADDON_MAX then break end
+						local x, y = node.gx * TILE, -node.gy * TILE
+						if (x - cam.x) ^ 2 + (y - cam.y) ^ 2 <= R * R then
+							if node.h3d == nil then node.h3d = GroundHeight(cam.map, x, y) end
+							local sx, sy = Project(x, y, node.h3d)
+							if sx and abs(sx) < hw and abs(sy) < hh then
+								n = n + 1
+								local pin = pins[n]
+								if not pin then pin = GPS.NewAddonPin(ns.addonLayer); pins[n] = pin end
+								if pin.gpsNode ~= node or pin.gpsStamp ~= stamp then GPS.SetupAddonPin(pin, node); pin.gpsNode, pin.gpsStamp = node, stamp end
+								pin:ClearAllPoints()
+								pin:SetPoint("CENTER", canvas, "CENTER", sx, sy)
+								pin:Show()
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+	for i = n + 1, #pins do pins[i]:Hide() end
+	ns.addonShown = n
+end
+GPS3D_API.AddonPinsChanged = function() if frame:IsShown() then Render() end end
+
+------------------------------------------------------------------------------------------------
+-- The debug log (GPS's Debug.lua): what the view shows, and frame times since the last call
+------------------------------------------------------------------------------------------------
+GPS3D_API.DebugState = function()
+	return ("3D map %s looking at %.2f, %.2f from %.0f yd, yaw %.0f, tilt %.1f, camera %s, straight down %s; you: %s; title %s; %d tiles, %d triangles, %d building blocks"):format(
+		tostring(cam.map), cam.x / TILE, -cam.y / TILE, cam.dist, cam.yaw, cam.pitch, camMode, tostring(topDown),
+		player.on and ("on the map at %.2f, %.2f, height %.1f"):format(player.x / TILE, -player.y / TILE, player.h) or ("not shown (" .. tostring(player.why) .. ")"),
+		tostring(ui.title:GetText()), stats.tiles or 0, stats.tris or 0, stats.detail or 0) .. (ns.ModelsState and ("; " .. ns.ModelsState()) or "")
+end
+GPS3D_API.TakePerf = function()
+	local on = GPS.DebugOn and GPS.DebugOn()
+	local p = ns.perf
+	if not on then ns.perf = nil return nil end
+	ns.perf = { n = 0, sum = 0, max = 0, tris = 0 }
+	local models = ns.TakeModelsPerf and ns.TakeModelsPerf() -- Models.lua: models shown, loading, picking times
+	if not (p and p.n > 0) then return models end
+	return ("3D: %d frames drawn, %.2f ms average, %.2f ms worst, %.0f triangles average"):format(p.n, p.sum / p.n, p.max, p.tris / p.n) .. (models and ("; " .. models) or "")
+end
+
+------------------------------------------------------------------------------------------------
+-- Settings: the 3D view's part of GPS's page in Options > AddOns (GPS's Settings.lua shows them),
+-- the same changes as the slash commands. On ns, not as locals: this chunk is at Lua 5.1's limit.
+------------------------------------------------------------------------------------------------
+ns.DB = function() GPS3D_DB = GPS3D_DB or {} return GPS3D_DB end
+ns.Redraw = function() if frame:IsShown() then Render() end end
+ns.SetMarker = function(v) markerMode = v; ns.DB().marker = v; ns.Redraw() end
+ns.SetDetail = function(on)
+	useDetail = on
+	ForgetLift()
+	ns.DB().detail = on
+	player.hx = nil
+	if ns.ModelsChanged then ns.ModelsChanged() end -- the game's buildings go with them (Models.lua)
+	ns.Redraw()
+end
+ns.SetBuildingBudget = function(n) DETAIL_BUDGET = n; ns.DB().buildings = n; ns.Redraw() end
+ns.SetGridBudget = function(n) TRI_BUDGET = n; ns.DB().grid = n; ns.Redraw() end
+ns.SetModelYaw = function(degrees) ns.DB().modelYaw = rad(degrees); ns.Redraw() end
+
+GPS3D_API.settings = {
+	{ kind = "header", name = "3D view" },
+	{
+		kind = "choice", key = "GPS3D_Marker", name = "You are shown as",
+		tooltip = "The arrow on the ground, your character, or both (/gps3d marker).",
+		default = "both",
+		choices = function() return { { "arrow", "Arrow" }, { "model", "Character" }, { "both", "Arrow and character" } } end,
+		get = function() return GPS3D_DB and GPS3D_DB.marker end,
+		set = function(v) ns.SetMarker(v) end,
+	},
+	{
+		kind = "choice", key = "GPS3D_Camera", name = "Camera on you",
+		tooltip = "How the view follows you when it opens and when you click Me: from above as it is turned, or from behind, looking your way (the ring under Me).",
+		default = "follow",
+		choices = function() return { { "follow", "Follow" }, { "behind", "Behind you" } } end,
+		get = function() return GPS3D_DB and GPS3D_DB.camMode end,
+		set = function(v)
+			ns.DB().camMode = v
+			if frame:IsShown() and Following() then FollowMe(v) end
+		end,
+	},
+	{
+		kind = "check", key = "GPS3D_TopDown", name = "Look straight down",
+		tooltip = "Lock the view straight down (the bottom ring). Off: right-drag tilts it.",
+		default = true,
+		get = function() return not (GPS3D_DB and GPS3D_DB.topDown == false) end,
+		set = function(v) SetTopDown(v, not frame:IsShown()) end,
+	},
+	{
+		kind = "check", key = "GPS3D_Buildings", name = "Buildings",
+		tooltip = "Buildings, bridges and walls close up. Off: the ground only (/gps3d detail).",
+		default = true,
+		get = function() return GPS3D_DB and GPS3D_DB.detail end,
+		set = function(v) ns.SetDetail(v) end,
+	},
+	{
+		kind = "slider", key = "GPS3D_BuildingBudget", name = "Building detail",
+		tooltip = "Building triangles drawn per frame, nearest the middle of the view first. Lower is faster (/gps3d buildings).",
+		default = 4000, min = 1000, max = 8000, step = 500,
+		format = function(v) return ("%d"):format(v) end,
+		get = function() return GPS3D_DB and GPS3D_DB.buildings end,
+		set = function(v) ns.SetBuildingBudget(v) end,
+	},
+	{
+		kind = "slider", key = "GPS3D_GridBudget", name = "Ground detail",
+		tooltip = "Ground triangles drawn per frame; far ground gets coarser to stay within it. Lower is faster (/gps3d budget).",
+		default = 3200, min = 1600, max = 6400, step = 400,
+		format = function(v) return ("%d"):format(v) end,
+		get = function() return GPS3D_DB and GPS3D_DB.grid end,
+		set = function(v) ns.SetGridBudget(v) end,
+	},
+	{
+		kind = "slider", key = "GPS3D_ModelYaw", name = "Turn your character",
+		tooltip = "Only if your character faces the wrong way in the 3D view (/gps3d modelyaw).",
+		default = 90, min = 0, max = 345, step = 15,
+		format = function(v) return ("%d\194\176"):format(v) end,
+		get = function() return GPS3D_DB and GPS3D_DB.modelYaw and floor(deg(GPS3D_DB.modelYaw) + 0.5) % 360 end,
+		set = function(v) ns.SetModelYaw(v) end,
+	},
+}
 
 ------------------------------------------------------------------------------------------------
 -- Slash command
@@ -1957,7 +2197,7 @@ end
 -- /gps3d marker <arrow|model|both>
 -- /gps3d modelyaw <deg>   turn the character model if it faces the wrong way (default 90)
 -- /gps3d detail <on|off>  buildings close up, or the grid everywhere
--- /gps3d budget <n>       grid triangles per frame (default 3200)
+-- /gps3d budget <n>       ground (grid) triangles per frame (default 3200)
 -- /gps3d buildings <n>    building triangles per frame (default 4000)
 -- /gps3d top              look straight down (locked), or tilt freely again (the straight-down ring)
 -- /gps3d model [id]       any model by FileDataID at the centre (default: an Elwynn tree, 189927;
@@ -1968,6 +2208,7 @@ end
 -- /gps3d cam              print the scene camera's vectors
 SLASH_GPS3D1 = "/gps3d"
 SlashCmdList.GPS3D = function(msg)
+	GPS.Log("SLASH", "/gps3d %s", msg or "")
 	local cmd, arg = strtrim(msg or ""):match("^(%S*)%s*(.-)$")
 	cmd = cmd:lower()
 	if cmd == "test" then
@@ -1975,50 +2216,32 @@ SlashCmdList.GPS3D = function(msg)
 	elseif cmd == "pretend" then
 		ns.fake = not ns.fake and { angle = 0 } or nil
 		print("|cff55ff55GPS3D|r: stand-in " .. (ns.fake and "on" or "off"))
-		frame:Show()
+		GPS3D_API.Open()
 		if ns.fake then FollowMe() else ReadPlayer(); UpdateFooter(); Render() end
 	elseif cmd == "marker" then
-		if arg == "arrow" or arg == "model" or arg == "both" then
-			markerMode = arg
-			GPS3D_DB = GPS3D_DB or {}
-			GPS3D_DB.marker = arg
-		end
+		if arg == "arrow" or arg == "model" or arg == "both" then ns.SetMarker(arg) end
 		print("|cff55ff55GPS3D|r: marker " .. markerMode)
-		Render()
 	elseif cmd == "detail" then
-		if arg == "on" or arg == "off" then
-			useDetail = arg == "on"
-			ForgetLift()
-			GPS3D_DB = GPS3D_DB or {}
-			GPS3D_DB.detail = useDetail
-			player.hx = nil
-		end
+		if arg == "on" or arg == "off" then ns.SetDetail(arg == "on") end
 		print("|cff55ff55GPS3D|r: buildings " .. (useDetail and "on" or "off"))
-		Render()
 	elseif cmd == "top" then
-		frame:Show()
+		GPS3D_API.Open()
 		SetTopDown(not topDown)
 		print("|cff55ff55GPS3D|r: " .. (topDown and "looking straight down" or "tilt free"))
 	elseif cmd == "buildings" then
-		DETAIL_BUDGET = tonumber(arg) or DETAIL_BUDGET
-		GPS3D_DB = GPS3D_DB or {}
-		GPS3D_DB.buildings = DETAIL_BUDGET
+		ns.SetBuildingBudget(tonumber(arg) or DETAIL_BUDGET)
 		print(("|cff55ff55GPS3D|r: %d building triangles per frame"):format(DETAIL_BUDGET))
-		Render()
 	elseif cmd == "budget" then
-		TRI_BUDGET = tonumber(arg) or TRI_BUDGET
+		ns.SetGridBudget(tonumber(arg) or TRI_BUDGET)
 		print(("|cff55ff55GPS3D|r: %d grid triangles per frame"):format(TRI_BUDGET))
-		Render()
 	elseif cmd == "modelyaw" then
-		GPS3D_DB = GPS3D_DB or {}
-		GPS3D_DB.modelYaw = rad(tonumber(arg) or 90)
+		ns.SetModelYaw(tonumber(arg) or 90)
 		print(("|cff55ff55GPS3D|r: model yaw %.0f degrees"):format(deg(GPS3D_DB.modelYaw)))
-		Render()
 	elseif cmd == "model" then
-		frame:Show()
+		GPS3D_API.Open()
 		Place(tonumber(arg) or 189927, cam.x, cam.y, 1, 0)
 	elseif cmd == "trees" then
-		frame:Show()
+		GPS3D_API.Open()
 		local placed, seed = 0, 7
 		for _ = 1, 40 do
 			seed = (seed * 1103515245 + 12345) % 2147483648
@@ -2043,6 +2266,6 @@ SlashCmdList.GPS3D = function(msg)
 		print("|cff55ff55GPS3D|r up", scene:GetCameraUp())
 		print("|cff55ff55GPS3D|r fov", scene:GetCameraFieldOfView(), "projected target", scene:Project3DPointTo2D(cam.x, cam.y, cam.th + Lift()))
 	else
-		frame:SetShown(not frame:IsShown())
+		if frame:IsShown() then frame:Hide() else GPS3D_API.Open() end
 	end
 end

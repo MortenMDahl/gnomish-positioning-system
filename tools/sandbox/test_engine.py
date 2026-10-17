@@ -7,7 +7,12 @@ L = lupa54.LuaRuntime()
 G = L.globals()
 G.SANDBOX_MEASURE = lambda text, size: len(text) * size * 0.55
 L.execute(open(f'{SITE}/engine.lua').read())
-for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua']), ('GPS3D', ['Data/Northshire.lua', 'GPS3D.lua'])]:
+L.execute(open(f'{SITE}/zones.lua').read())  # every zone of the two continents (make_zones.py)
+def toc_files(path):  # the files a TOC loads, in order
+    return [l.strip().replace('\\', '/') for l in open(path).read().splitlines() if l.strip() and not l.startswith('##')]
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
+for addon, files in [('GnomishPositioningSystem', toc_files(os.path.join(ROOT, 'Interface', 'AddOns', 'GnomishPositioningSystem', 'GnomishPositioningSystem.toc'))),
+                     ('GPS3D', toc_files(os.path.join(ROOT, 'prototypes', 'GPS3D', 'GPS3D.toc')))]:
     for f in files:
         ok = G.SANDBOX_LOAD(addon, f, open(f'{SITE}/addons/{addon}/{f}').read())
         print('load', addon, f, ok)

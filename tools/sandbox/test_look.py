@@ -1,5 +1,5 @@
 # Checks the window look ("minimap rings", option B) on the sandbox engine (Lua 5.4, as in the
-# sandbox): what each window shows, the rings and what they do, tooltips, and layout at the
+# sandbox) for the 2D and 3D windows (the traditional map: test_modes.py): what each window shows, the rings and what they do, tooltips, and layout at the
 # smallest window size. Usage: python test_look.py   (fill site/addons first, as for test_world.py)
 import lupa.lua54 as lupa54, math, os
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -8,9 +8,10 @@ L = lupa54.LuaRuntime()
 G = L.globals()
 G.SANDBOX_MEASURE = lambda text, size: len(text) * size * 0.55
 L.execute(open(f'{SITE}/engine.lua').read())
+L.execute(open(f'{SITE}/zones.lua').read())  # every zone of the two continents (make_zones.py)
 toc = open(os.path.join(HERE, '..', '..', 'prototypes', 'GPS3D', 'GPS3D.toc')).read()
 gps3d_files = [l.strip().replace('\\', '/') for l in toc.splitlines() if l.strip() and not l.startswith('##')]
-for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua']), ('GPS3D', gps3d_files)]:
+for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'MapWindow.lua']), ('GPS3D', gps3d_files)]:
     for f in files:
         if not G.SANDBOX_LOAD(addon, f, open(f'{SITE}/addons/{addon}/{f}').read()): print('LOAD FAILED', addon, f)
     G.SANDBOX_LOADED(addon)
@@ -43,7 +44,7 @@ F1 = G.GPS_MapFrame
 bd = F1.GetBackdrop(F1)
 check('2D: frameless, a 1 px black edge', bd.edgeSize == 1 and 'white8x8' in str(bd.edgeFile).lower() and tuple(F1._bdBorder.values())[:3] == (0, 0, 0), f'edge {bd.edgeFile} {bd.edgeSize}')
 rings1 = lua_list(u1.rings)
-check('2D: rings are 2D/3D then Me', same(rings1, [u1.modeSwitch, u1.me]) and u1.modeSwitch.label.GetText(u1.modeSwitch.label) == '2D', f'{len(rings1)} rings')
+check('2D: rings are compass, mode ring (2D), Me', same(rings1, [u1.compass, u1.modeSwitch, u1.me]) and u1.modeSwitch.label.GetText(u1.modeSwitch.label) == '2D', f'{len(rings1)} rings')
 check('2D: close uses the RedButton-Exit atlas', u1.close._normal.GetAtlas(u1.close._normal) == 'RedButton-Exit' and u1.close._pushed.GetAtlas(u1.close._pushed) == 'RedButton-exit-pressed')
 zi, zo = u1.zoomIn, u1.zoomOut
 check('2D: zoom buttons are rings the size of the others (30 px) with a small sign (plus: 4 bars, minus: 2; the sign 9 px)',
@@ -57,7 +58,10 @@ check('2D: Me ring brass once you look elsewhere', u1.me.active == False)
 click(u1.me); tick(3)
 check('2D: Me ring follows you again', ns1.view.follow and u1.me.active == True)
 hover(u1.modeSwitch)
-check('2D: 2D/3D ring has a tooltip', G.GameTooltip.IsShown(G.GameTooltip) and G.GameTooltip.IsOwned(G.GameTooltip, u1.modeSwitch))
+tip1 = lua_list(u1.modeSwitch.tooltip(u1.modeSwitch))
+check('2D: mode ring tooltip names the next mode and, right-click, the one before',
+      G.GameTooltip.IsShown(G.GameTooltip) and G.GameTooltip.IsOwned(G.GameTooltip, u1.modeSwitch)
+      and tip1 == ['2D map', 'Click: 3D view of the same place', 'Right-click: Traditional map'], str(tip1))
 G.GameTooltip_Hide()
 
 def layout_ok(frame, ui, name):
@@ -78,9 +82,10 @@ F1.SetSize(F1, 900, 650); tick(2)
 # ---- 3D
 click(u1.modeSwitch); tick(10); chat()
 F2 = G.GPS3D_Frame
-check('2D/3D ring opens the 3D view in the same place', F2.IsShown(F2) and not F1.IsShown(F1) and rect(F2) == rect(F1))
+check('mode ring (click) opens the 3D view in the same place', F2.IsShown(F2) and not F1.IsShown(F1) and rect(F2) == rect(F1))
 rings2 = lua_list(u2.rings)
-check('3D: rings are compass, straight down, 2D/3D, camera, Me', same(rings2, [ns2.compass, ns2.topButton, u2.modeSwitch, ns2.camButton, u2.me]) and u2.modeSwitch.label.GetText(u2.modeSwitch.label) == '3D', f'{len(rings2)} rings')
+check('3D: rings are compass, mode (3D), Me, then camera and straight down', same(rings2, [ns2.compass, u2.modeSwitch, u2.me, ns2.camButton, ns2.topButton]) and u2.modeSwitch.label.GetText(u2.modeSwitch.label) == '3D', f'{len(rings2)} rings')
+check('compass, mode ring and Me at the same places in 2D and 3D (they stay under the mouse when switching)', all(rect(a) == rect(b) for a, b in ((u1.compass, ns2.compass), (u1.modeSwitch, u2.modeSwitch), (u1.me, u2.me))), str([rect(x)[:2] for x in (u1.compass, u1.modeSwitch, u1.me, ns2.compass, u2.modeSwitch, u2.me)]))
 check('3D: no map switch; subtitle is just the map', not u2.prev.IsShown(u2.prev) and not u2.next.IsShown(u2.next) and u2.subtitle.GetText(u2.subtitle) == 'Eastern Kingdoms', str(u2.subtitle.GetText(u2.subtitle)))
 check('3D: opens following you; camera ring and Me gold', ns2.CamMode() == 'follow' and ns2.camButton.active == True and u2.me.active == True)
 check('3D: footer: where you are, then the mode', 'Northshire Valley' in str(u2.footer.GetText(u2.footer)) and str(u2.footer.GetText(u2.footer)).endswith('Following|r'), str(u2.footer.GetText(u2.footer)))
@@ -136,8 +141,15 @@ layout_ok(F2, u2, '3D at 900x650')
 F2.SetSize(F2, 400, 300); tick(3)
 layout_ok(F2, u2, '3D at 400x300 (smallest)')
 F2.SetSize(F2, 900, 650); tick(3)
-click(u2.modeSwitch); tick(5)
-check('2D/3D ring in 3D goes back to the 2D map', F1.IsShown(F1) and not F2.IsShown(F2))
+u2.modeSwitch._scripts.OnClick(u2.modeSwitch, 'RightButton'); tick(5)
+check('mode ring in 3D, right-click: back to the 2D map', F1.IsShown(F1) and not F2.IsShown(F2))
+def background(canvas):  # the canvas's bottom-most texture (BACKGROUND, sublevel -8) and its colour
+    regs = [r for r in canvas._regions.values() if r._layer == 1 and r._sub == -8]
+    t = regs[0]
+    return t, tuple(round(v * 255) for v in list(t._color.values())[:3])
+b1, c1 = background(ns1.canvas)
+b2, c2 = background(ns2.canvas)
+check('2D and 3D backgrounds are both the open sea of the minimap images (#081110), no gradient', c1 == c2 == (8, 17, 16) and not b1._grad and not b2._grad, f'2D {c1}, 3D {c2}')
 chat()
 n = sum(1 for _, ok in results if ok)
 print(f'{n} of {len(results)} checks passed')

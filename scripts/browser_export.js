@@ -6,7 +6,6 @@
 // terrain tiles, and downloads gps-export.zip with:
 //   export.json             every map's tiles and their minimap FileDataIDs, plus the overview atlases
 //   Overview/<map>_<ax>_<ay>.jpg   zoomed-out overview images, 64 px per tile, 16x16 tiles per atlas
-//   northshire_tin.json     (optional) the Northshire test tile as a simplified 1-yard height mesh
 // Then run scripts/build_maptiles.py on the zip to write the addon's data files.
 
 (function hookWorker() {
@@ -37,7 +36,7 @@
 	// The hook catches the worker on the page's next request: move the camera (or press O) once.
 })();
 
-window.gpsExport = async function gpsExport({ overviewPx = 64, atlasTiles = 16, jpegQuality = 0.9, source = 'wow_classic_beta', tin = null, onProgress = () => {} } = {}) {
+window.gpsExport = async function gpsExport({ overviewPx = 64, atlasTiles = 16, jpegQuality = 0.9, source = 'wow_classic_beta', onProgress = () => {} } = {}) {
 	const call = window.__gps && window.__gps.call;
 	if (!call) throw new Error('The storage worker is not hooked yet: move the camera once, then run gpsExport() again');
 	const pow2 = (n) => { let p = 1; while (p < n) p *= 2; return p; };
@@ -65,7 +64,7 @@ window.gpsExport = async function gpsExport({ overviewPx = 64, atlasTiles = 16, 
 				canvas.width = pow2(cols * overviewPx);
 				canvas.height = pow2(rows * overviewPx);
 				const g = canvas.getContext('2d');
-				g.fillStyle = '#0f2434';
+				g.fillStyle = '#081110'; // open sea, as in the game's minimap images (GPS's background in 2D and 3D)
 				g.fillRect(0, 0, canvas.width, canvas.height);
 				for (let i = 0; i < inside.length; i += 32) {
 					const batch = inside.slice(i, i + 32).map((t) => [t.x, t.y]);
@@ -86,7 +85,6 @@ window.gpsExport = async function gpsExport({ overviewPx = 64, atlasTiles = 16, 
 	}
 	const enc = new TextEncoder();
 	files['export.json'] = enc.encode(JSON.stringify({ exportedAt: new Date().toISOString(), source, overviewPx, atlasTiles, maps }));
-	if (tin) files['northshire_tin.json'] = enc.encode(JSON.stringify(tin));
 	const { zipSync } = await import('https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm');
 	const zip = zipSync(files, { level: 0 });
 	const url = URL.createObjectURL(new Blob([zip], { type: 'application/zip' }));
