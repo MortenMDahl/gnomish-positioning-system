@@ -7,8 +7,8 @@ are noisy (about ±20 %) and say nothing certain about the real client, where th
 
 ## Applied (2026-10-14, the "light" set, 7 changes)
 
-From a review by a separate agent; the applied change as a diff against the previous file:
-`tools/sandbox/perf/light.diff`.
+From a review by a separate agent; the change itself is in the git history (the diff kept here until
+2026-10-18 was removed: it could no longer be applied to anything).
 
 1. Free mode: when only you moved, redraw just the marker (`RenderMarker`), not the world.
 2. Skip `SetVertexOffset` for vertices that moved less than `VO_EPS` = 0.25 px since last sent (decided per

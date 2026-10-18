@@ -14,6 +14,11 @@
 --    guarded, so a layer that errors on GPS's map is switched off and noted in the debug log instead
 --    of throwing errors. When the addon refreshes its layer (RefreshAllData, or a method named
 --    Refresh... or Update... called on the original), the copy is refreshed too while it is shown.
+--    Known limit: the copy runs the addon's own code, so state the addon keeps in its file, not on the
+--    provider, is shared by both maps. GatherMate2 keeps its world-map pins in one list (worldmapPins)
+--    that each refresh empties and fills, and builds the tooltip for overlapping nodes from it: the map
+--    refreshed last has the list, so on the other one that tooltip shows only the node under the
+--    cursor. Nothing breaks; it is the price of running one addon's layer on two maps.
 -- 2. GatherMate2 on the 2D map and in the 3D view: its nodes for the zones of the map shown, through
 --    GatherMate2's own functions (GetNodesForZone, DecodeLoc, GetNameForNode, Visible, nodeTextures,
 --    its settings for scale, alpha and the world map), drawn with its pin template and its pin
@@ -379,18 +384,13 @@ function ns.LayoutAddonPins()
 					local px, py = ns.GridToScreen(node.gx, node.gy)
 					if px >= -8 and px <= w + 8 and py >= -8 and py <= h + 8 then
 						n = n + 1
-						local pin = pins2D[n]
-						if not pin then pin = C.NewPin(layer2D); pins2D[n] = pin end
-						if pin.gpsNode ~= node or pin.gpsStamp ~= stamp then C.SetupPin(pin, node); pin.gpsNode, pin.gpsStamp = node, stamp end
-						pin:ClearAllPoints()
-						pin:SetPoint("CENTER", canvas, "TOPLEFT", px, -py)
-						pin:Show()
+						ns.PlacePin(pins2D, n, node, stamp, C.NewPin, C.SetupPin, layer2D, canvas, "TOPLEFT", px, -py)
 					end
 				end
 			end
 		end
 	end
-	for i = n + 1, #pins2D do pins2D[i]:Hide() end
+	ns.HidePins(pins2D, n)
 	C.shown2D = n
 end
 

@@ -132,7 +132,7 @@ ok3, bad3 = 0, []
 cw, chh = ns3.canvas.GetSize(ns3.canvas)
 c3l, c3b, c3r, c3t = G.SANDBOX.rect(ns3.canvas)
 for p in pins3:
-    n = p.gpsNode
+    n = p.gpsItem
     x, y = n.gx * TILE, -n.gy * TILE
     sx, sy, _ = ns3.Project(x, y, ns3.GroundHeight(x, y))
     l, b, r, t = G.SANDBOX.rect(p)
@@ -218,5 +218,18 @@ if src and os.path.isdir(src):
     for f in glob.glob(os.path.join(ROOT, 'Interface', 'AddOns', 'GnomishPositioningSystem', '*.lua')) + glob.glob(os.path.join(ROOT, 'prototypes', 'GPS3D', '*.lua')):
         ours += [(os.path.basename(f), r) for r in runs(f) & theirs]
     check(f'no code of GatherMate2 in GPS\'s files (no run of 3 lines shared with its {len(theirs)} runs)', not ours, str(ours[:2]))
+# ---- the shared marker pool (GPS_API.PlacePin / HidePins): after a frame with many markers, the next frames hide only what was shown
+g.L.execute('''
+local pins, hides = {}, 0
+for i = 1, 800 do pins[i] = { Hide = function() hides = hides + 1 end } end
+local H = GPS_API.HidePins
+H(pins, 800); local a = hides   -- 800 shown: nothing to hide
+H(pins, 0); local b = hides - a  -- zoomed out: the 800 shown ones
+H(pins, 0); local c = hides - a - b -- the next frame: nothing
+H(pins, 5); H(pins, 2); local d = hides - a - b - c -- 5 shown, then 2: 3 hidden
+SANDBOX_HIDES = string.format("%d,%d,%d,%d", a, b, c, d)
+''')
+hides = [int(v) for v in str(g.G.SANDBOX_HIDES).split(',')]
+check('marker pools hide only the markers shown last time (800 after zooming out, then none per frame)', hides == [0, 800, 0, 3], str(hides))
 check('no Lua errors', not errors, '; '.join(errors[:3]))
 print(f'{sum(ok for _, ok in results)} of {len(results)} checks passed')

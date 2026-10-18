@@ -9,6 +9,7 @@ caves. --all takes every tile the new export visited. Writes the result over the
 is given, and prints what changed.
 """
 import json
+import os
 import sys
 
 
@@ -56,7 +57,11 @@ def main(argv):
                 else:
                     und.pop(k, None)
     assert set(old['tiles']) == set(old['low']) == set(old['far']) == set(stats), 'tiles, low, far and stats disagree'
-    json.dump(old, open(out or old_path, 'w'))
+    # written next to the target, then swapped in: an interrupted run leaves the old file whole
+    target = out or old_path
+    with open(target + '.tmp', 'w') as f:
+        json.dump(old, f)
+    os.replace(target + '.tmp', target)
     print(f'{old_path}: {len(keys)} tiles from {new_path}: {replaced} replaced, {removed} removed, {added} added; {len(old["tiles"])} tiles now')
 
 

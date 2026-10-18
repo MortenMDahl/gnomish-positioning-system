@@ -210,6 +210,11 @@ pinLayer:SetAllPoints()
 pinLayer:SetFrameLevel(canvas:GetFrameLevel() + 8)
 local pins2D, areas2D = {}, {} -- marker buttons; zone -> quest-area frame
 Q.pins2D, Q.areas2D = pins2D, areas2D
+-- (the tracked quest's marker sits over the others)
+function Q.SetupPin2D(pin, q)
+	Q.SetupPin(pin, q)
+	pin:SetFrameLevel(pinLayer:GetFrameLevel() + (q.tracked and 2 or 1))
+end
 
 -- A zone's rectangle on the grid, from its corners (0, 0) and (1, 1).
 local function ZoneRect(zone)
@@ -260,19 +265,10 @@ function ns.LayoutQuests()
 	local stamp = cache.stamp
 	-- markers
 	for i, q in ipairs(list) do
-		local pin = pins2D[i]
-		if not pin then pin = Q.NewPin(pinLayer); pins2D[i] = pin end
-		if pin.gpsQ ~= q or pin.gpsStamp ~= stamp then
-			Q.SetupPin(pin, q)
-			pin:SetFrameLevel(pinLayer:GetFrameLevel() + (q.tracked and 2 or 1))
-			pin.gpsQ, pin.gpsStamp = q, stamp
-		end
 		local px, py = ns.GridToScreen(q.gx, q.gy)
-		pin:ClearAllPoints()
-		pin:SetPoint("CENTER", canvas, "TOPLEFT", px, -py)
-		pin:Show()
+		ns.PlacePin(pins2D, i, q, stamp, Q.NewPin, Q.SetupPin2D, pinLayer, canvas, "TOPLEFT", px, -py)
 	end
-	for i = #list + 1, #pins2D do pins2D[i]:Hide() end
+	ns.HidePins(pins2D, #list)
 	-- objective areas: one frame per zone with an area to draw
 	local want = {}
 	for _, q in ipairs(list == EMPTY and EMPTY or Q.AreaQuests(view.map)) do
@@ -280,7 +276,7 @@ function ns.LayoutQuests()
 		table.insert(want[q.zone], q.questID)
 	end
 	for zone, f in pairs(areas2D) do
-		if f and not want[zone] then f.quests, f.key = nil, nil; f:DrawNone(); f:Hide() end
+		if f and not want[zone] and f:IsShown() then f.quests, f.key = nil, nil; f:DrawNone(); f:Hide() end
 	end
 	for zone, ids in pairs(want) do
 		local f, r = AreaFrame(zone), ZoneRect(zone)

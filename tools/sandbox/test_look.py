@@ -86,7 +86,17 @@ check('mode ring (click) opens the 3D view in the same place', F2.IsShown(F2) an
 rings2 = lua_list(u2.rings)
 check('3D: rings are compass, mode (3D), Me, then camera and straight down', same(rings2, [ns2.compass, u2.modeSwitch, u2.me, ns2.camButton, ns2.topButton]) and u2.modeSwitch.label.GetText(u2.modeSwitch.label) == '3D', f'{len(rings2)} rings')
 check('compass, mode ring and Me at the same places in 2D and 3D (they stay under the mouse when switching)', all(rect(a) == rect(b) for a, b in ((u1.compass, ns2.compass), (u1.modeSwitch, u2.modeSwitch), (u1.me, u2.me))), str([rect(x)[:2] for x in (u1.compass, u1.modeSwitch, u1.me, ns2.compass, u2.modeSwitch, u2.me)]))
-check('3D: no map switch; subtitle is just the map', not u2.prev.IsShown(u2.prev) and not u2.next.IsShown(u2.next) and u2.subtitle.GetText(u2.subtitle) == 'Eastern Kingdoms', str(u2.subtitle.GetText(u2.subtitle)))
+check('3D: < and > around the map name, at the same places as on the 2D map, brass', u2.prev.IsShown(u2.prev) and u2.next.IsShown(u2.next) and u2.subtitle.GetText(u2.subtitle) == 'Eastern Kingdoms'
+      and rect(u2.prev) == rect(u1.prev) and u2.prev.color[1] == u1.prev.color[1] > 0.7, f'{u2.subtitle.GetText(u2.subtitle)}; 3D < {rect(u2.prev)[:2]} 2D < {rect(u1.prev)[:2]}')
+# > steps to the next map that has terrain, seen whole from above, the camera freed; < comes back
+order = [m for m in lua_list(G.GPS_API.MapOrder) if ns2.World[m] is not None]
+i0 = order.index(int(ns2.cam.map))
+click(u2.next); tick(3)
+went = int(ns2.cam.map); mode_next = ns2.CamMode(); sub_next = str(u2.subtitle.GetText(u2.subtitle)); dist_next = ns2.cam.dist
+click(u2.prev); tick(3)
+check('3D: > shows the next map with terrain whole (camera freed, name updated), < goes back', went == order[(i0 + 1) % len(order)] and mode_next == 'free' and sub_next != 'Eastern Kingdoms'
+      and dist_next > 3000 and int(ns2.cam.map) == order[i0], f'{order[i0]} -> {went} ({sub_next}, {mode_next}, distance {dist_next:.0f}) -> {ns2.cam.map}')
+ns2.FollowMe(); tick(30)
 check('3D: opens following you; camera ring and Me gold', ns2.CamMode() == 'follow' and ns2.camButton.active == True and u2.me.active == True)
 check('3D: footer: where you are, then the mode', 'Northshire Valley' in str(u2.footer.GetText(u2.footer)) and str(u2.footer.GetText(u2.footer)).endswith('Following|r'), str(u2.footer.GetText(u2.footer)))
 seq = []
@@ -134,8 +144,14 @@ check('tilt free: ring brass, its grid in perspective (far edge shorter, squashe
       ns2.IsTopDown() != top0 and ns2.topButton.active == False and edge(c, 1, 3) < edge(c, 2, 4) - 0.1 and edge(c, 1, 2) < edge(c, 2, 4),
       f'pitch {ns2.cam.pitch:.1f} far {edge(c, 1, 3):.2f} near {edge(c, 2, 4):.2f} side {edge(c, 1, 2):.2f} px')
 pts = [p for k in range(1, 5) for p in cell_corners(k).values()]
-r_max = max(math.hypot(x, y) for x, y in pts)
-check('the grid stays inside the ring', r_max <= 30 * 0.3 * 1.25, f'furthest corner {r_max:.2f} px (padding included)')
+r_tilt = max(math.hypot(x, y) for x, y in pts)
+pitch_was = ns2.cam.pitch
+ns2.cam.pitch, ns2.cam.yaw = 89.9, 45; ns2.UpdateGrid()  # straight down, turned: the corners reach furthest
+r_top = max(math.hypot(x, y) for k in range(1, 5) for x, y in cell_corners(k).values())
+ns2.cam.pitch, ns2.cam.yaw = pitch_was, 0; ns2.UpdateGrid()
+ring_w = ns2.topButton.GetWidth(ns2.topButton)
+check('the whole grid stays well inside the ring (within 0.22 of its width from the centre, padding included)', max(r_tilt, r_top) <= ring_w * 0.22 * 1.25,
+      f'furthest corner {r_tilt:.2f} px tilted, {r_top:.2f} px straight down and turned; ring {ring_w:.0f} px')
 click(ns2.topButton); tick(20)
 layout_ok(F2, u2, '3D at 900x650')
 F2.SetSize(F2, 400, 300); tick(3)

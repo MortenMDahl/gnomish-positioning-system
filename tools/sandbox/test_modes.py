@@ -266,6 +266,15 @@ G.SANDBOX_SLASH('/gps test'); tick(90)
 out = G.SANDBOX_CHAT() or ''
 lines = [l for l in out.split('\n') if 'modes:' in l or 'traditional map:' in l]
 print('\n'.join(lines))
+# ---- < and > on the 2D map: browsing stops following you and is saved like a drag (a reload keeps the browsed map)
+ns1.OpenNamed('2D'); tick(3); ns1.FollowPlayer(); tick(3)
+follow_before = bool(ns1.db.follow)
+map_before = int(ns1.view.map)
+click(u1.next); tick(3)
+check('2D: > shows the next map and saves that you stopped following (db.follow off, db.map the new map)', follow_before and ns1.db.follow == False and int(ns1.db.map) != map_before and int(ns1.view.map) == int(ns1.db.map),
+      f'follow before {follow_before}, after {ns1.db.follow}; map {map_before} -> {ns1.db.map}')
+click(u1.prev); tick(3); ns1.FollowPlayer(); tick(3)
+
 # ---- /gps grid (tile numbers, drawn on the 2D map) from the 3D view: never two windows at once
 overworld(); G.GPS_Toggle() if not any(shown(x) for x in (F1, F2, F3)) else None; tick(3)
 ns1.OpenNamed('3D'); tick(5); mode_before = ns1.db.mode; chat()

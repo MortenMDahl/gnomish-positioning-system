@@ -10,6 +10,7 @@ vertex of its block, every vertex must lie in its block (and on its level's grid
 triangles must cover the block exactly once (areas add up to 64 x 64 steps) with one winding. Prints
 sizes and the TOC lines.
 """
+import glob
 import json
 import os
 import sys
@@ -140,7 +141,21 @@ def main():
         print(f'{name}: {n} tiles, {size / 1024:.0f} KB')
     total = sum(w[2] for w in written)
     print(f'{len(by_map)} maps in {len(written)} files, {len(tiles)} tiles, {n_blocks} blocks, {n_tris} triangles (coarse: {n_low}, far: {n_far}), {total / 1024 / 1024:.2f} MB; all blocks checked')
-    print('TOC:\n' + '\n'.join(f'Data\\{name}' for name, *_ in written))
+    # the TOC's Detail lines, rewritten where they were (a new part file is loaded; one no longer made is not)
+    toc = os.path.join(out_dir, '..', 'GPS3D.toc')
+    if os.path.exists(toc):
+        lines = open(toc, encoding='utf-8').read().split('\n')
+        is_detail = lambda l: l.startswith('Data\\Detail_') and l.endswith('.lua')
+        at = next((i for i, l in enumerate(lines) if is_detail(l)), None)
+        if at is None:
+            at = next((i for i, l in enumerate(lines) if l.startswith('Data\\Models_') or l == 'GPS3D.lua'), len(lines))
+        lines = [l for l in lines if not is_detail(l)]
+        lines[at:at] = ['Data\\' + name for name, *_ in written]
+        open(toc, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines))
+        print(f'{os.path.normpath(toc)}: {len(written)} Detail lines')
+    stale = sorted(set(os.path.basename(f) for f in glob.glob(os.path.join(out_dir, 'Detail_*.lua'))) - {name for name, *_ in written})
+    if stale:
+        print('not made any more (delete them; the TOC no longer lists them): ' + ', '.join(stale))
 
 
 if __name__ == '__main__':

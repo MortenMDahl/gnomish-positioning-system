@@ -69,17 +69,13 @@ local LEVEL_STEP = { TILE / 512, TILE / 128, TILE / 64 }
 local LEVEL_PX = 10
 local DETAIL_BIAS = 30             -- grid triangles under a drawn building block are drawn as if this much further
 local BUILD_LIMIT = 1500           -- building triangles made into textures per frame (more blocks follow next frames)
-local GEO_LIMIT = 1500             -- decoded building blocks kept
+local GEO_LIMIT = 400              -- decoded building blocks kept (a busy frame touches up to about 115; 1500 until 2026-10-18: up to 80 MB)
 local KEEP_SECONDS = 3             -- unused tile meshes are kept this long before their textures are reused
 local TEX_LIMIT = 16000            -- above this many terrain textures, unused meshes give theirs back at once
 
 local sin, cos, rad, deg, floor, ceil, min, max, sqrt, abs = math.sin, math.cos, math.rad, math.deg, math.floor, math.ceil, math.min, math.max, math.sqrt, math.abs
 
-local function Usable(v)
-	if v == nil then return false end
-	if issecretvalue and issecretvalue(v) then return false end
-	return true
-end
+local Usable = GPS.Usable -- nil, or a value the game hides from addons (secret): not usable
 
 ------------------------------------------------------------------------------------------------
 -- Frame (GPS's look)
@@ -158,10 +154,6 @@ local ui = GPS.ApplyChrome(frame, canvas, {
 	onSized = function() if GPS.SaveGeometry then GPS.SaveGeometry(frame) end end,
 })
 ns.ui = ui
-ui.prev:Hide()
-ui.next:Hide()
-ui.subtitle:ClearAllPoints()
-ui.subtitle:SetPoint("TOPLEFT", 10, -28)
 
 -- The rings down the right edge (GPS's look): compass, mode (3D), Me, as in every GPS window and at
 -- the same places (so switching modes keeps them under the mouse), then camera mode and straight
@@ -479,6 +471,7 @@ local function Num(s, pos, n)
 	for i = pos, pos + n - 1 do v = v * 64 + B64[s:byte(i)] end
 	return v
 end
+ns.B64, ns.Num = B64, Num -- (Models.lua reads its data with them)
 
 -- A tile's blocks: { s = string, n = count, [block index] = position of the block in s }, or nil
 local blockIndex = {}
@@ -1414,7 +1407,7 @@ local UpdateGrid
 do -- (in a block: the main chunk is near Lua 5.1's limit of 200 local variables)
 	local GRID_D = 4            -- viewing distance in grid squares: how strong the perspective is
 	local GRID_E = 1 / 6        -- the cell texture's inset (1/8 of it each side), in grid squares
-	local GRID_R = 0.3          -- the grid stays within this share of the ring's width from its centre
+	local GRID_R = 0.22         -- the grid stays within this share of the ring's width from its centre (0.3 until 2026-10-18: it reached the ring in the game)
 	local gridFit = {}          -- tilt (tenths of a degree) -> px per grid square
 	local CELLS = { { -1, -1 }, { 0, -1 }, { -1, 0 }, { 0, 0 } }
 	local function GridPoint(u, v, ct, st, sp, cp, scale)
@@ -1899,6 +1892,30 @@ GPS3D_API = {
 	frame = frame,
 }
 
+-- < and > around the map's name (as on GPS's 2D map): the previous or next map that has terrain, in
+-- GPS's order, its main land seen whole from above, the camera freed from you.
+function ns.CycleMap(step)
+	local list = {}
+	for _, id in ipairs(GPS.MapOrder or {}) do if ns.World[id] then list[#list + 1] = id end end
+	if #list == 0 then return end
+	local index
+	for i, id in ipairs(list) do if id == cam.map then index = i break end end
+	local map = index and list[(index - 1 + step) % #list + 1] or (step > 0 and list[1] or list[#list])
+	local m = GPS.Maps and GPS.Maps[map]
+	SetCamMode("free")
+	if m then
+		local x0, y0, x1, y1 = m.fitMinX or m.minX, m.fitMinY or m.minY, m.fitMaxX or m.maxX, m.fitMaxY or m.maxY
+		SetMap(map, (x0 + x1 + 1) / 2 * TILE, -(y0 + y1 + 1) / 2 * TILE)
+		cam.dist = max(MIN_DIST, min(MAX_DIST, max(x1 - x0 + 1, y1 - y0 + 1) * TILE * 0.9))
+	else
+		SetMap(map)
+	end
+	GPS.Log("3D", "map arrows: %s", MapName(map))
+	Render()
+end
+ui.prev:SetScript("OnClick", function() ns.CycleMap(-1) end)
+ui.next:SetScript("OnClick", function() ns.CycleMap(1) end)
+
 ------------------------------------------------------------------------------------------------
 -- Extra models (tests)
 ------------------------------------------------------------------------------------------------
@@ -2025,20 +2042,16 @@ ns.UpdateQuestPins = function()
 			local sx, sy = Project(x, y, q.h3d)
 			if sx and abs(sx) < hw and abs(sy) < hh then
 				n = n + 1
-				local pin = pins[n]
-				if not pin then pin = GPS.NewQuestPin(ns.questLayer); pins[n] = pin end
-				if pin.gpsQ ~= q or pin.gpsStamp ~= stamp then
-					GPS.SetupQuestPin(pin, q)
-					pin:SetFrameLevel(ns.questLayer:GetFrameLevel() + (q.tracked and 2 or 1))
-					pin.gpsQ, pin.gpsStamp = q, stamp
-				end
-				pin:ClearAllPoints()
-				pin:SetPoint("CENTER", canvas, "CENTER", sx, sy)
-				pin:Show()
+				GPS.PlacePin(pins, n, q, stamp, GPS.NewQuestPin, ns.SetupQuestPin, ns.questLayer, canvas, "CENTER", sx, sy)
 			end
 		end
 	end
-	for i = n + 1, #pins do pins[i]:Hide() end
+	GPS.HidePins(pins, n)
+end
+-- (the tracked quest's marker sits over the others)
+ns.SetupQuestPin = function(pin, q)
+	GPS.SetupQuestPin(pin, q)
+	pin:SetFrameLevel(ns.questLayer:GetFrameLevel() + (q.tracked and 2 or 1))
 end
 GPS3D_API.QuestsChanged = function() if frame:IsShown() then Render() end end
 
@@ -2071,12 +2084,7 @@ ns.UpdateAddonPins = function()
 							local sx, sy = Project(x, y, node.h3d)
 							if sx and abs(sx) < hw and abs(sy) < hh then
 								n = n + 1
-								local pin = pins[n]
-								if not pin then pin = GPS.NewAddonPin(ns.addonLayer); pins[n] = pin end
-								if pin.gpsNode ~= node or pin.gpsStamp ~= stamp then GPS.SetupAddonPin(pin, node); pin.gpsNode, pin.gpsStamp = node, stamp end
-								pin:ClearAllPoints()
-								pin:SetPoint("CENTER", canvas, "CENTER", sx, sy)
-								pin:Show()
+								GPS.PlacePin(pins, n, node, stamp, GPS.NewAddonPin, GPS.SetupAddonPin, ns.addonLayer, canvas, "CENTER", sx, sy)
 							end
 						end
 					end
@@ -2084,7 +2092,7 @@ ns.UpdateAddonPins = function()
 			end
 		end
 	end
-	for i = n + 1, #pins do pins[i]:Hide() end
+	GPS.HidePins(pins, n)
 	ns.addonShown = n
 end
 GPS3D_API.AddonPinsChanged = function() if frame:IsShown() then Render() end end

@@ -131,6 +131,24 @@ local function TextButton(parent, text, font, tooltip)
 end
 ns.TextButton = TextButton
 
+-- Markers from a pool (quests and other addons' nodes, on the 2D map and in the 3D view): pin n of
+-- pins shows item at (x, y) from relPoint of rel, set up again only when its item or the data's stamp
+-- changed; HidePins then hides the pins shown last time beyond n (not the whole pool every frame).
+local shownPins = setmetatable({}, { __mode = "k" }) -- pins -> how many were shown last time
+function ns.PlacePin(pins, n, item, stamp, NewPin, SetupPin, layer, rel, relPoint, x, y)
+	local pin = pins[n]
+	if not pin then pin = NewPin(layer); pins[n] = pin end
+	if pin.gpsItem ~= item or pin.gpsStamp ~= stamp then SetupPin(pin, item); pin.gpsItem, pin.gpsStamp = item, stamp end
+	pin:ClearAllPoints()
+	pin:SetPoint("CENTER", rel, relPoint, x, y)
+	pin:Show()
+	return pin
+end
+function ns.HidePins(pins, n)
+	for i = n + 1, shownPins[pins] or #pins do if pins[i] then pins[i]:Hide() end end
+	shownPins[pins] = n
+end
+
 -- A round button in the minimap's gold ring (the look of the minimap's tracking button): a dark
 -- disc, the ring, and either a short label or a small icon in the middle. Brass at rest, gold when
 -- active (SetActive), lit by the minimap zoom buttons' highlight on hover.
@@ -322,13 +340,16 @@ function ns.ApplyChrome(frame, canvas, opts)
 	ui.title:SetPoint("TOPLEFT", 10, -8)
 	ui.title:SetJustifyH("LEFT")
 	ui.title:SetShadowOffset(1, -1)
-	ui.prev = TextButton(band, "<", nil, "Previous map")
+	-- < and > around the map's name: brass and a size up from the subtitle, so they read as buttons
+	ui.prev = TextButton(band, "<", "GameFontNormal", "Previous map")
+	ui.prev:SetColor(BRASS)
 	ui.prev:SetPoint("TOPLEFT", 4, -26)
 	ui.subtitle = band:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	ui.subtitle:SetPoint("LEFT", ui.prev, "RIGHT", 0, 0)
 	ui.subtitle:SetTextColor(GREY[1], GREY[2], GREY[3])
 	ui.subtitle:SetShadowOffset(1, -1)
-	ui.next = TextButton(band, ">", nil, "Next map")
+	ui.next = TextButton(band, ">", "GameFontNormal", "Next map")
+	ui.next:SetColor(BRASS)
 	ui.next:SetPoint("LEFT", ui.subtitle, "RIGHT", 0, 0)
 
 	-- Close: Blizzard's own red close button art.
@@ -700,6 +721,7 @@ function ns.CycleMap(step)
 	for i, id in ipairs(mapOrder) do if id == view.map then index = i break end end
 	index = (index - 1 + step) % #mapOrder + 1
 	view.follow = false
+	if ns.db then ns.db.follow = false end -- kept like a drag's: the browsed map is still shown after a reload
 	ns.ShowMap(mapOrder[index])
 end
 
@@ -1045,8 +1067,13 @@ GPS_API = {
 	DebugOn = function() return ns.debugOn end,
 	-- the zone at a grid point (see ns.ZoneNameAt): the 3D view's title
 	ZoneNameAt = function(instance, gx, gy) return ns.ZoneNameAt(instance, gx, gy) end,
-	-- map data for the 3D view's textures
+	-- map data for the 3D view's textures, and the order < and > step through
 	Maps = Maps,
+	MapOrder = mapOrder,
+	-- shared helpers: a value the game hides from addons (secret) or nil is not usable; marker pools
+	Usable = Usable,
+	PlacePin = ns.PlacePin,
+	HidePins = ns.HidePins,
 	OverviewPath = ADDON_PATH .. "Overview\\",
 	OverviewPx = OverviewPx,
 	OverviewExt = ns.OverviewExt or "jpg",

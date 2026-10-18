@@ -49,16 +49,7 @@ local function Get(key)
 end
 ns.ModelSetting = Get
 
-local B64 = {}
-do
-	local chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	for i = 1, 64 do B64[chars:byte(i)] = i - 1 end
-end
-local function Num(s, pos, n)
-	local v = 0
-	for i = pos, pos + n - 1 do v = v * 64 + B64[s:byte(i)] end
-	return v
-end
+local Num = ns.Num -- base64 numbers, as GPS3D.lua reads its own data
 
 ------------------------------------------------------------------------------------------------
 -- Data: a map's models (palette) and a tile's placements, decoded when first needed
