@@ -172,12 +172,17 @@ local topButton = GPS.RingButton(ui.chrome, function()
 	if ns.IsTopDown() then return { "Looking straight down", "Click: tilt freely (right-drag tilts)" } end
 	return { "Tilting freely", "Click: look straight down again" }
 end)
+-- Each square is laid over the whole button, the same rectangle as the ring's art, and bent into place
+-- from its corners (UpdateGrid): a 1x1 texture at the ring's centre, which lies between pixels, was
+-- moved to a whole pixel by the game's pixel snapping before the bending (up to half a pixel off the
+-- ring, until 2026-10-18); snapping is also switched off where the game has that.
 topButton.cells = {}
 for i = 1, 4 do
 	local t = topButton:CreateTexture(nil, "ARTWORK")
 	t:SetTexture(GPS.MEDIA .. "Cell")
-	t:SetSize(1, 1)
-	t:SetPoint("CENTER", topButton, "CENTER", 0, topButton.centreY)
+	t:SetAllPoints(topButton)
+	if t.SetSnapToPixelGrid then t:SetSnapToPixelGrid(false) end
+	if t.SetTexelSnappingBias then t:SetTexelSnappingBias(0) end
 	topButton.cells[i] = t
 end
 do
@@ -1415,31 +1420,56 @@ do -- (in a block: the main chunk is near Lua 5.1's limit of 200 local variables
 		local k = GRID_D / (GRID_D + f * cp)
 		return x * k * scale, f * sp * k * scale
 	end
+	-- The middle of the box round the drawn outline (ground corners +-1, +-1) at this tilt and turn:
+	-- in perspective the near half is drawn bigger than the far half, so the grid's own centre is not
+	-- the middle of what is drawn; the grid is moved by this to sit in the middle of the ring.
+	local function GridMiddle(ct, st, sp, cp, scale)
+		local x0, x1, y0, y1 = 1e9, -1e9, 1e9, -1e9
+		for u = -1, 1, 2 do
+			for v = -1, 1, 2 do
+				local x, y = GridPoint(u, v, ct, st, sp, cp, scale)
+				x0, x1, y0, y1 = min(x0, x), max(x1, x), min(y0, y), max(y1, y)
+			end
+		end
+		return (x0 + x1) / 2, (y0 + y1) / 2
+	end
 	function UpdateGrid()
 		local p, t = rad(cam.pitch), rad(cam.yaw)
 		local sp, cp, ct, st = sin(p), cos(p), cos(t), sin(t)
 		local key = floor(cam.pitch * 10 + 0.5)
 		local scale = gridFit[key]
 		if not scale then
-			-- the furthest a grid corner gets from the centre at this tilt, over every turn
+			-- the furthest a corner of the drawn grid gets from the ring's centre at this tilt, over every
+			-- turn, with the grid centred as below
 			local worst = 0
 			for i = 0, 63 do
 				local a = i * math.pi / 32
-				local x, y = GridPoint(1.4143 * cos(a), 1.4143 * sin(a), 1, 0, sp, cp, 1)
-				worst = max(worst, sqrt(x * x + y * y))
+				local ca, sa = cos(a), sin(a)
+				local mx, my = GridMiddle(ca, sa, sp, cp, 1)
+				for u = -1, 1, 2 do
+					for v = -1, 1, 2 do
+						local x, y = GridPoint(u, v, ca, sa, sp, cp, 1)
+						x, y = x - mx, y - my
+						worst = max(worst, sqrt(x * x + y * y))
+					end
+				end
 			end
 			scale = topButton:GetWidth() * GRID_R / worst
 			gridFit[key] = scale
 		end
+		local mx, my = GridMiddle(ct, st, sp, cp, scale)
+		-- each texture covers the button, whose centre is centreY below the ring's: its corners sit at
+		-- (-+hw, +-hh) from the button's centre, and each offset is the grid corner's place minus that
+		local hw, hh = topButton:GetWidth() / 2, topButton:GetHeight() / 2
+		mx, my = mx - hw, my - topButton.centreY
 		local lo, hi = -GRID_E, 1 + GRID_E
 		for i, c in ipairs(CELLS) do
 			local tex, u0, v0 = topButton.cells[i], c[1], c[2]
-			-- corners: 1 upper left (far left), 2 lower left, 3 upper right, 4 lower right; the
-			-- texture is 1x1 at the ring's centre, so each offset is the corner's place minus (-+0.5, +-0.5)
-			local x, y = GridPoint(u0 + lo, v0 + hi, ct, st, sp, cp, scale); SetVertexOffset(tex, 1, x + 0.5, y - 0.5)
-			x, y = GridPoint(u0 + lo, v0 + lo, ct, st, sp, cp, scale); SetVertexOffset(tex, 2, x + 0.5, y + 0.5)
-			x, y = GridPoint(u0 + hi, v0 + hi, ct, st, sp, cp, scale); SetVertexOffset(tex, 3, x - 0.5, y - 0.5)
-			x, y = GridPoint(u0 + hi, v0 + lo, ct, st, sp, cp, scale); SetVertexOffset(tex, 4, x - 0.5, y + 0.5)
+			-- corners: 1 upper left (far left), 2 lower left, 3 upper right, 4 lower right
+			local x, y = GridPoint(u0 + lo, v0 + hi, ct, st, sp, cp, scale); SetVertexOffset(tex, 1, x - mx, y - my - hh)
+			x, y = GridPoint(u0 + lo, v0 + lo, ct, st, sp, cp, scale); SetVertexOffset(tex, 2, x - mx, y - my + hh)
+			x, y = GridPoint(u0 + hi, v0 + hi, ct, st, sp, cp, scale); SetVertexOffset(tex, 3, x - mx - 2 * hw, y - my - hh)
+			x, y = GridPoint(u0 + hi, v0 + lo, ct, st, sp, cp, scale); SetVertexOffset(tex, 4, x - mx - 2 * hw, y - my + hh)
 		end
 	end
 

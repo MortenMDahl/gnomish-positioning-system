@@ -122,12 +122,15 @@ for yaw in (0, 45, 135, 270):
 check('compass needle turned by the view yaw (north on screen)', ok, ' '.join(det))
 top0 = ns2.IsTopDown()
 def cell_corners(k):  # screen offsets of a grid cell's corners from the ring's centre (1 UL, 2 LL, 3 UR, 4 LR)
-    t = ns2.topButton.cells[k]
-    base = {1: (-0.5, 0.5), 2: (-0.5, -0.5), 3: (0.5, 0.5), 4: (0.5, -0.5)}
+    t, b = ns2.topButton.cells[k], ns2.topButton
+    l, bo, r, tp = rect(t)          # the texture's own rectangle (its corners before the offsets)
+    bl, bb, br, bt = rect(b)
+    cx, cy = (bl + br) / 2, (bb + bt) / 2 + b.centreY  # the ring's centre: the button's, raised by centreY
+    base = {1: (l, tp), 2: (l, bo), 3: (r, tp), 4: (r, bo)}
     out = {}
     for i in range(1, 5):
         dx, dy = t.GetVertexOffset(t, i)
-        out[i] = (base[i][0] + dx, base[i][1] + dy)
+        out[i] = (base[i][0] + dx - cx, base[i][1] + dy - cy)
     return out
 def edge(c, a, b): return math.hypot(c[a][0] - c[b][0], c[a][1] - c[b][1])
 ns2.cam.yaw = 0; ns2.Render()
@@ -152,6 +155,31 @@ ns2.cam.pitch, ns2.cam.yaw = pitch_was, 0; ns2.UpdateGrid()
 ring_w = ns2.topButton.GetWidth(ns2.topButton)
 check('the whole grid stays well inside the ring (within 0.22 of its width from the centre, padding included)', max(r_tilt, r_top) <= ring_w * 0.22 * 1.25,
       f'furthest corner {r_tilt:.2f} px tilted, {r_top:.2f} px straight down and turned; ring {ring_w:.0f} px')
+# The drawn grid centred in the ring at every tilt and turn: the outline's four outer corners (ground
+# points (+-1, +-1)) as the game draws them, 1/8 of the texture in from each outer cell's corner (the
+# cell texture is drawn on the bent quad: bilinear between its 4 corners), their bounding box's centre
+# within a quarter of a pixel of the ring's centre (GPS3D centres the outline as projected; the game
+# stretches the texture over the bent quad without perspective, which moves the drawn line up to
+# about 0.15 px; before 2026-10-18 the grid sat up to 1.3 px low when tilted).
+E = 1 / 6
+CELL_OF = {(-1, -1): 1, (0, -1): 2, (-1, 0): 3, (0, 0): 4}  # GPS3D's CELLS order
+def drawn_corner(U, V):
+    u0, v0 = (-1 if U < 0 else 0), (-1 if V < 0 else 0)
+    c = cell_corners(CELL_OF[(u0, v0)])  # 1 (lo u, hi v), 2 (lo, lo), 3 (hi, hi), 4 (hi, lo)
+    a, b = (U - u0 + E) / (1 + 2 * E), (V - v0 + E) / (1 + 2 * E)
+    w = {2: (1 - a) * (1 - b), 1: (1 - a) * b, 4: a * (1 - b), 3: a * b}
+    return sum(w[i] * c[i][0] for i in w), sum(w[i] * c[i][1] for i in w)
+worst_off, worst_at = 0, ''
+for pitch in (45, 50, 60, 70, 80, 89.9):
+    for yaw in (0, 20, 45, 90, 135, 200, 300):
+        ns2.cam.pitch, ns2.cam.yaw = pitch, yaw; ns2.UpdateGrid()
+        pts = [drawn_corner(U, V) for U in (-1, 1) for V in (-1, 1)]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        off = math.hypot((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2)
+        if off > worst_off: worst_off, worst_at = off, f'pitch {pitch} yaw {yaw}: ({(min(xs) + max(xs)) / 2:+.2f}, {(min(ys) + max(ys)) / 2:+.2f}) px'
+ns2.cam.pitch, ns2.cam.yaw = pitch_was, 0; ns2.UpdateGrid()
+check('the drawn grid is centred in the ring at every tilt and turn (its outline\'s box within 0.25 px of the centre)', worst_off <= 0.25,
+      f'worst {worst_off:.3f} px at {worst_at}')
 click(ns2.topButton); tick(20)
 layout_ok(F2, u2, '3D at 900x650')
 F2.SetSize(F2, 400, 300); tick(3)
