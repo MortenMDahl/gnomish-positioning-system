@@ -152,10 +152,14 @@ end
 -- A round button in the minimap's gold ring (the look of the minimap's tracking button): a dark
 -- disc, the ring, and either a short label or a small icon in the middle. Brass at rest, gold when
 -- active (SetActive), lit by the minimap zoom buttons' highlight on hover.
--- The ring texture (64x64) holds the ring in its top-left corner: gold from texel 4 to 34 across
--- and 4 to 33 down. Cropping texels 0..39 puts it in the middle of the button across and half a
--- texel above the middle, so the disc, label and icon sit that much (centreY) above the centre.
+-- The ring texture (64x64) holds the ring in its top-left corner: gold over pixels 4 to 35 across
+-- (centre 20.0 texels from the left edge) and 4 to 33 down (centre 19.0). The crop is 39 texels
+-- square: across from 0.5 to 39.5, which puts the ring in the middle of the button; down from 0 to
+-- 39 (above 0 there is nothing to crop), which leaves it half a texel above the middle, so the disc,
+-- label and icon sit that much (centreY) above the centre. (Until 2026-10-18 the crop started at 0
+-- across too, which left everything in the rings half a texel, 0.4 px, left of the ring's centre.)
 local RING_TC = 39 / 64
+local RING_X0 = 0.5 / 64
 local LABEL_FIT = 0.40               -- a label is shrunk to fit this share of the ring's width
 -- size: the ring's size in px (RING unless given).
 local function RingButton(parent, tooltip, size)
@@ -171,7 +175,7 @@ local function RingButton(parent, tooltip, size)
 	disc:SetPoint("CENTER", 0, up)
 	local ring = b:CreateTexture(nil, "OVERLAY")
 	ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-	ring:SetTexCoord(0, RING_TC, 0, RING_TC)
+	ring:SetTexCoord(RING_X0, RING_X0 + RING_TC, 0, RING_TC)
 	ring:SetAllPoints()
 	local glow = b:CreateTexture(nil, "HIGHLIGHT")
 	glow:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")

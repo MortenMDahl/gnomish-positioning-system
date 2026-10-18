@@ -180,6 +180,28 @@ for pitch in (45, 50, 60, 70, 80, 89.9):
 ns2.cam.pitch, ns2.cam.yaw = pitch_was, 0; ns2.UpdateGrid()
 check('the drawn grid is centred in the ring at every tilt and turn (its outline\'s box within 0.25 px of the centre)', worst_off <= 0.25,
       f'worst {worst_off:.3f} px at {worst_at}')
+# The rings' contents on the gold ring's centre: the ring art's gold band measured in the image itself
+# (the middle of the band's outer extent on each of rows and columns 12..27, in texels), taken through
+# the texture coordinates and rectangle the code gives the ring texture, against the centre the disc,
+# label, icon and grid are placed on (the disc's centre). Until 2026-10-18 they sat 0.38 px left.
+from PIL import Image
+_art = Image.open(os.path.join(HERE, 'site', 'ui', 'minimap-trackingborder.png')).convert('RGBA')
+_px = _art.load()
+def _gold(x, y): p = _px[x, y]; return p[3] > 150 and p[0] > 60
+_cx = sum((min(k for k in range(40) if _gold(k, i)) + max(k for k in range(40) if _gold(k, i))) / 2 + 0.5 for i in range(12, 28)) / 16
+_cy = sum((min(k for k in range(40) if _gold(i, k)) + max(k for k in range(40) if _gold(i, k))) / 2 + 0.5 for i in range(12, 28)) / 16
+worst_ring, det = 0, []
+for b in [ns1.ui.compass if hasattr(ns1, 'ui') and ns1.ui else None] + rings2:
+    if b is None or not b.ring: continue
+    tc = list(b.ring.GetTexCoord(b.ring))  # UL x, y, LL x, y, UR x, y, LR x, y
+    l, bo, r, tp = rect(b.ring)
+    gx = l + (_cx / 64 - tc[0]) / (tc[4] - tc[0]) * (r - l)
+    gy = tp - (_cy / 64 - tc[1]) / (tc[3] - tc[1]) * (tp - bo)
+    dl, db, dr, dt = rect(b.disc)
+    dx, dy = (dl + dr) / 2 - gx, (db + dt) / 2 - gy
+    worst_ring = max(worst_ring, math.hypot(dx, dy)); det.append(f'({dx:+.2f},{dy:+.2f})')
+check(f'every ring\'s contents sit on the gold ring\'s centre (art centre {_cx:.2f}, {_cy:.2f} texels; within 0.1 px)', worst_ring <= 0.1 and len(det) >= 5,
+      f'worst {worst_ring:.3f} px; disc minus ring per ring: ' + ' '.join(det))
 click(ns2.topButton); tick(20)
 layout_ok(F2, u2, '3D at 900x650')
 F2.SetSize(F2, 400, 300); tick(3)
