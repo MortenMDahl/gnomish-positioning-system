@@ -44,7 +44,7 @@ local STORM_SIZE = 1.45 * MAEL_SIZE -- the storm over it, half size
 local NEAR = 1
 local MEDIA = "Interface\\AddOns\\" .. addonName .. "\\Globe\\"
 local SEA = GPS.colors and GPS.colors.sea or { 8 / 255, 17 / 255, 16 / 255 }
-local BLUE = { 0.10, 0.27, 0.56 }
+local BLUE = { 0.04, 0.12, 0.26 } -- the open sea seen from far off: a deep navy (0.10, 0.27, 0.56 until 2026-10-19: too bright a step from the minimap's dark water)
 local LIGHT = { -0.45 / 1.0, 0.55, 0.70 } -- normalised below: from the upper left, a little toward you
 do local l = sqrt(LIGHT[1] ^ 2 + LIGHT[2] ^ 2 + LIGHT[3] ^ 2); LIGHT[1], LIGHT[2], LIGHT[3] = LIGHT[1] / l, LIGHT[2] / l, LIGHT[3] / l end
 
