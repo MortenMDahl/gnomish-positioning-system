@@ -58,5 +58,7 @@ Data\Models_489.lua
 Data\Models_509.lua
 Data\Models_529.lua
 Data\Models_531.lua
+Data\Globe.lua
 GPS3D.lua
 Models.lua
+Globe.lua

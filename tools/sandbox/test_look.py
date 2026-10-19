@@ -11,7 +11,7 @@ L.execute(open(f'{SITE}/engine.lua').read())
 L.execute(open(f'{SITE}/zones.lua').read())  # every zone of the two continents (make_zones.py)
 toc = open(os.path.join(HERE, '..', '..', 'prototypes', 'GPS3D', 'GPS3D.toc')).read()
 gps3d_files = [l.strip().replace('\\', '/') for l in toc.splitlines() if l.strip() and not l.startswith('##')]
-for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'MapWindow.lua']), ('GPS3D', gps3d_files)]:
+for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'World.lua', 'MapWindow.lua']), ('GPS3D', gps3d_files)]:
     for f in files:
         if not G.SANDBOX_LOAD(addon, f, open(f'{SITE}/addons/{addon}/{f}').read()): print('LOAD FAILED', addon, f)
     G.SANDBOX_LOADED(addon)

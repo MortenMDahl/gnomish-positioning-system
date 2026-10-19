@@ -115,6 +115,7 @@ for k = 1, BUCKET_FRAMES do
 	f:SetFrameLevel(canvas:GetFrameLevel() + k)
 	bucketFrames[k] = f
 end
+ns.bucketFrames = bucketFrames -- hidden while the planet view draws (Globe.lua)
 
 -- You, on the ground: the minimap arrow bent into perspective like the terrain, above it.
 local decalFrame = CreateFrame("Frame", nil, canvas)
@@ -146,6 +147,7 @@ local function NewActor()
 	return ok and actor or nil
 end
 ns.NewActor, ns.frame, ns.TILE, ns.BLOCK = NewActor, frame, TILE, BLOCK
+ns.MAX_PITCH, ns.MAX_DIST, ns.FOV = MAX_PITCH, MAX_DIST, FOV -- for the planet view (Globe.lua)
 
 -- after a move or resize, its place and size become the saved one (GPS keeps it for every mode)
 local ui = GPS.ApplyChrome(frame, canvas, {
@@ -847,9 +849,10 @@ end
 local liftKey = {}
 local function Lift()
 	local k = liftKey
-	if k.map ~= cam.map or k.x ~= cam.x or k.y ~= cam.y or k.th ~= cam.th or k.dist ~= cam.dist or k.yaw ~= cam.yaw or k.pitch ~= cam.pitch then
-		k.map, k.x, k.y, k.th, k.dist, k.yaw, k.pitch = cam.map, cam.x, cam.y, cam.th, cam.dist, cam.yaw, cam.pitch
-		k.lift = LiftFor(cam.x, cam.y, cam.th, cam.dist, cam.yaw, cam.pitch)
+	local pitch = cam.vp or cam.pitch
+	if k.map ~= cam.map or k.x ~= cam.x or k.y ~= cam.y or k.th ~= cam.th or k.dist ~= cam.dist or k.yaw ~= cam.yaw or k.pitch ~= pitch then
+		k.map, k.x, k.y, k.th, k.dist, k.yaw, k.pitch = cam.map, cam.x, cam.y, cam.th, cam.dist, cam.yaw, pitch
+		k.lift = LiftFor(cam.x, cam.y, cam.th, cam.dist, cam.yaw, pitch)
 	end
 	return k.lift
 end
@@ -859,7 +862,7 @@ ns.ForgetLift = ForgetLift
 
 -- forward (fx, fy, fz), right (rx, ry, 0), up (ux, uy, uz) and the camera position
 local function CameraBasis()
-	local yaw, p = rad(cam.yaw), rad(cam.pitch)
+	local yaw, p = rad(cam.yaw), rad(cam.vp or cam.pitch) -- cam.vp: the tilt drawn, set by Globe.lua (nil: cam.pitch)
 	local sy_, cy_, sp, cp = sin(yaw), cos(yaw), sin(p), cos(p)
 	local fx, fy, fz = sy_ * cp, cy_ * cp, -sp
 	local rx, ry = cy_, -sy_
@@ -1434,9 +1437,10 @@ do -- (in a block: the main chunk is near Lua 5.1's limit of 200 local variables
 		return (x0 + x1) / 2, (y0 + y1) / 2
 	end
 	function UpdateGrid()
-		local p, t = rad(cam.pitch), rad(cam.yaw)
+		local pitch = cam.vp or cam.pitch -- the tilt drawn
+		local p, t = rad(pitch), rad(cam.yaw)
 		local sp, cp, ct, st = sin(p), cos(p), cos(t), sin(t)
-		local key = floor(cam.pitch * 10 + 0.5)
+		local key = floor(pitch * 10 + 0.5)
 		local scale = gridFit[key]
 		if not scale then
 			-- the furthest a corner of the drawn grid gets from the ring's centre at this tilt, over every
@@ -1478,10 +1482,13 @@ ns.UpdateGrid = UpdateGrid
 
 local function UpdateCompass()
 	-- north on screen: the direction +y points to, seen from above the orbit point
-	if cam.yaw == compassYaw and cam.pitch == compass.pitch then return end
-	compassYaw, compass.pitch = cam.yaw, cam.pitch
+	local pitch = cam.vp or cam.pitch
+	-- (on the planet the needle shows the planet's north, Globe.lua; the ground's north elsewhere)
+	local yaw = cam.yaw - (ns.GlobeNorth and ns.GlobeNorth() or 0)
+	if yaw == compassYaw and pitch == compass.pitch then return end
+	compassYaw, compass.pitch = yaw, pitch
 	-- north on screen is at (-sin yaw, cos yaw): the needle (drawn pointing up) turned anticlockwise by yaw
-	compass.icon:SetRotation(rad(cam.yaw))
+	compass.icon:SetRotation(rad(yaw))
 	UpdateGrid()
 end
 
@@ -1523,12 +1530,22 @@ end
 local function Render()
 	if not frame:IsShown() then return end
 	local t0 = debugprofilestop()
+	-- the planet view (Globe.lua): sets the tilt drawn (cam.vp) and, zoomed out past the hand-over, draws
+	-- the planet instead of the ground below (true)
+	if ns.GlobeRender and ns.GlobeRender() then
+		UpdateCompass()
+		UpdateTitle()
+		stats.ms = debugprofilestop() - t0
+		local p = ns.perf
+		if p then p.n, p.sum = p.n + 1, p.sum + stats.ms; if stats.ms > p.max then p.max = stats.ms end end
+		return
+	end
 	local F = Focal()
 	local fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz = CameraBasis()
 	RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	-- the models' camera: the same pose in Blizzard's terms (forward = cosP cosY, cosP sinY, -sinP)
 	scene:SetCameraPosition(cx, cy, cz)
-	scene:SetCameraOrientationByYawPitchRoll(rad(90 - cam.yaw), rad(min(cam.pitch, 89.9)), 0)
+	scene:SetCameraOrientationByYawPitchRoll(rad(90 - cam.yaw), rad(min(cam.vp or cam.pitch, 89.9)), 0)
 	scene:SetCameraFieldOfView(cam.fov or FOV)
 	if ns.UpdateModels then ns.UpdateModels(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz) end -- the game's models (Models.lua)
 	for _, a in ipairs(actors) do
@@ -1551,6 +1568,7 @@ ns.Render = Render
 -- Only you moved (the camera did not): just the marker, not the world.
 local function RenderMarker()
 	if not frame:IsShown() then return end
+	if ns.GlobeMarker and ns.GlobeMarker() then return end -- on the planet: your arrow there (Globe.lua)
 	UpdateMarker()
 	UpdateTitle()
 end
@@ -1586,6 +1604,8 @@ local function FlyTo(target, duration, onDone)
 	for k in pairs(target) do start[k] = cam[k] end
 	if target.yaw then target.yaw = ShortYaw(start.yaw, target.yaw) end
 	anim = { t = 0, d = duration or 0.4, start = start, target = target, done = onDone }
+	-- on the planet the point looked at travels along the sphere, not through the plane (Globe.lua)
+	anim.path = ns.GlobeFlyPath and ns.GlobeFlyPath(start, target)
 end
 ns.FlyTo = FlyTo
 
@@ -1615,6 +1635,7 @@ local function StepAnimation(elapsed)
 	local u = min(1, anim.t / anim.d)
 	local e = u * u * (3 - 2 * u)
 	for k, v in pairs(anim.target) do cam[k] = anim.start[k] + (v - anim.start[k]) * e end
+	if anim.path and u < 1 then anim.path(e) end
 	if u >= 1 then
 		cam.yaw = cam.yaw % 360
 		local done = anim.done
@@ -1653,7 +1674,8 @@ local function FollowMe(mode)
 	end
 	yawOffset = 0 -- straight behind you again
 	SetCamMode(mode)
-	if player.map ~= cam.map then SetMap(player.map, player.x, player.y) end
+	-- (on the planet, Globe.lua says the view's point on your continent, and the flight starts there)
+	if player.map ~= cam.map and not (ns.GlobeSwitchMap and ns.GlobeSwitchMap(player.map)) then SetMap(player.map, player.x, player.y) end
 	local target = { x = player.x, y = player.y, th = player.h }
 	if mode == "behind" then target.yaw = BehindYaw() end
 	FlyTo(target, 0.5)
@@ -1672,6 +1694,7 @@ local drag -- { button, startX, startY, lastX, lastY, moved, grabX, grabY }
 local lastClick = { time = 0, x = 0, y = 0 }
 
 canvas:SetScript("OnMouseDown", function(self, button)
+	if ns.GlobeMouseDown and ns.GlobeMouseDown(button) then drag = nil return end -- the planet view (Globe.lua)
 	local px, py = CursorInCanvas()
 	drag = { button = button, startX = px, startY = py, lastX = px, lastY = py, moved = false }
 	if button == "LeftButton" then
@@ -1682,6 +1705,7 @@ canvas:SetScript("OnMouseDown", function(self, button)
 end)
 
 canvas:SetScript("OnMouseUp", function(self, button)
+	if ns.GlobeMouseUp and ns.GlobeMouseUp(button) then return end -- the planet view (Globe.lua)
 	if not drag then return end
 	local d = drag
 	drag = nil
@@ -1696,7 +1720,7 @@ canvas:SetScript("OnMouseUp", function(self, button)
 					SetCamMode("free")
 					-- the orbit point on the view line through the clicked point, at the same height as now:
 					-- the point ends up in the middle and the camera keeps its altitude
-					local yr, p = rad(cam.yaw), rad(cam.pitch)
+					local yr, p = rad(cam.yaw), rad(cam.vp or cam.pitch)
 					local s = (gh - cam.th) / sin(p)
 					gx, gy = gx + sin(yr) * cos(p) * s, gy + cos(yr) * cos(p) * s
 					local b = Bounds(cam.map)
@@ -1753,7 +1777,8 @@ ns.DragUpdate = DragUpdate
 -- Zooming in stops where the camera would come closer than CLEARANCE to the ground or a roof below it.
 -- In free mode the height you see is kept from then on (a lift over a hill becomes your altitude).
 local function Zoom(factor, px, py)
-	local newDist = max(MIN_DIST, min(MAX_DIST, cam.dist * factor))
+	if ns.GlobeZoom and ns.GlobeZoom(factor, px, py) then return end -- zoomed out to the planet (Globe.lua)
+	local newDist = max(MIN_DIST, min(ns.ZoomMax and ns.ZoomMax() or MAX_DIST, cam.dist * factor))
 	local k = newDist / cam.dist
 	if k == 1 then return end
 	local following = Following()
@@ -1766,7 +1791,7 @@ local function Zoom(factor, px, py)
 		if gx then zx, zy, zz = gx, gy, gh end
 	end
 	local function LiftAt(kk)
-		return LiftFor(zx + (ox - zx) * kk, zy + (oy - zy) * kk, zz + (oz - zz) * kk, cam.dist * kk, cam.yaw, cam.pitch)
+		return LiftFor(zx + (ox - zx) * kk, zy + (oy - zy) * kk, zz + (oz - zz) * kk, cam.dist * kk, cam.yaw, cam.vp or cam.pitch)
 	end
 	if k < 1 then
 		local allowed = (following and lift or 0) + 0.5
@@ -1805,7 +1830,7 @@ end)
 ui.me:SetScript("OnClick", function() FollowMe() end)
 compass:SetScript("OnClick", function()
 	if camMode == "behind" then SetCamMode("follow") end -- north up means no longer turning with you
-	FlyTo({ yaw = 0 }, 0.4)
+	FlyTo({ yaw = ns.GlobeNorth and ns.GlobeNorth() or 0 }, 0.4) -- (the planet's north on the planet)
 end)
 
 -- Keeps the camera on you while following: moves with you, and in Behind turns with you.
@@ -1925,6 +1950,7 @@ GPS3D_API = {
 -- < and > around the map's name (as on GPS's 2D map): the previous or next map that has terrain, in
 -- GPS's order, its main land seen whole from above, the camera freed from you.
 function ns.CycleMap(step)
+	if ns.GlobeCycle and ns.GlobeCycle(step) then return end -- on the planet: turn it to the next continent (Globe.lua)
 	local list = {}
 	for _, id in ipairs(GPS.MapOrder or {}) do if ns.World[id] then list[#list + 1] = id end end
 	if #list == 0 then return end
@@ -2032,6 +2058,7 @@ local function SelfTest()
 	end
 	Report("scene fov %s (we set %.3f)", tostring(scene:GetCameraFieldOfView()), cam.fov or FOV)
 	if ns.ModelsSelfTest then ns.ModelsSelfTest(Report) end -- the game's models: data, and whether buildings (WMOs) load
+	if ns.GlobeSelfTest then ns.GlobeSelfTest(Report) end -- the planet view: the continents' layout, its art, a planet frame
 	C_Timer.After(3, function()
 		local loaded, checked, files = 0, 0, {}
 		for _, t in ipairs(stats.visible) do
@@ -2134,7 +2161,7 @@ GPS3D_API.DebugState = function()
 	return ("3D map %s looking at %.2f, %.2f from %.0f yd, yaw %.0f, tilt %.1f, camera %s, straight down %s; you: %s; title %s; %d tiles, %d triangles, %d building blocks"):format(
 		tostring(cam.map), cam.x / TILE, -cam.y / TILE, cam.dist, cam.yaw, cam.pitch, camMode, tostring(topDown),
 		player.on and ("on the map at %.2f, %.2f, height %.1f"):format(player.x / TILE, -player.y / TILE, player.h) or ("not shown (" .. tostring(player.why) .. ")"),
-		tostring(ui.title:GetText()), stats.tiles or 0, stats.tris or 0, stats.detail or 0) .. (ns.ModelsState and ("; " .. ns.ModelsState()) or "")
+		tostring(ui.title:GetText()), stats.tiles or 0, stats.tris or 0, stats.detail or 0) .. (ns.ModelsState and ("; " .. ns.ModelsState()) or "") .. (ns.GlobeState and ("; " .. ns.GlobeState()) or "")
 end
 GPS3D_API.TakePerf = function()
 	local on = GPS.DebugOn and GPS.DebugOn()

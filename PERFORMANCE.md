@@ -111,3 +111,19 @@ Measured in the sandbox (native Lua 5.4; `tools/sandbox/perf_models.py` and `tes
 
 Not measured here, and the main unknown: what the game itself spends drawing the actors (hundreds of animated M2 models, and WMOs if they load). The debug log's `PERF` lines carry the game's frame rate next to the number of models shown, choices and their times and model loads (TESTING.md section 10 step 4 gives the runs to compare); the settings (*Props and trees at most*, *Model distance*, *Smallest model*) are the knobs.
 
+## The planet (2026-10-19, `Globe.lua`)
+
+Measured in the sandbox (native Lua, `test_globe.py`): a planet frame at 60,000 yd about 0.4 ms of Lua, 100,000 yd 0.3 ms, the bending range (32,000 yd) 0.9 ms, just past the hand-over 2 ms (the overview images and the planet's pages both drawn while they cross-fade, up to two triangles per land tile), against 3.3 ms for the ground at 12,000 yd. No garbage per frame (memory flat over 300 frames: no tables or closures made while drawing). What keeps it cheap:
+
+- the land is coarse where it can be: blocks of 1 to 8 tiles by size on screen and curvature (about 200 triangles for the whole planet at 60,000 yd);
+- the sea, its shading and the glow are three textures (a disc cut to the canvas), not triangles;
+- a level's unit vectors are kept while the curvature does not change (turning and panning the round planet only rotates them);
+- textures are handed out once per level and kept between crossings of the hand-over; zoomed out past 6,000 yd an idle warm-up hands out the hand-over's 4 levels' images 400 a frame, so the first crossing costs about as much as the next frame (5.6 ms against 3.5 in the sandbox) instead of setting about 2,400 images at once;
+- the Maelstrom turns on its own (its whirlpool, storm and a lightning flash: up to 12 vertex offsets a frame) without redrawing the planet.
+
+Textures: up to about 5,700 land textures (both continents, each block size), about 90 clouds and their shadows (one quad each, the shadow the cloud's corners moved on screen, no second projection), 8 others, on top of the ground's pool. Images: 8 land pages of 1 MB (512 x 512, 32-bit TGA), 2 of 1 MB for the Maelstrom (whirlpool and storm, 512 x 512) and 9 smaller ones. The planet with the new sky (2026-10-19): 0.4-0.5 ms a frame at 60,000 yd, as before.
+
+## The 2D map with both continents (2026-10-19, `World.lua`, `Core.lua`)
+
+Zoomed out on the Eastern Kingdoms or Kalimdor, the other continent is drawn beside it (its overview images, and its minimap tiles close up). Measured in the sandbox (native Lua, 200 redraws each): 0.14 ms a redraw close up on the Eastern Kingdoms (48 live tiles, the other continent out of view), 0.09 ms zoomed out with both in view (overview images only), 0.16 ms close up over Kalimdor's coast while the view's map is still the Eastern Kingdoms (34 of Kalimdor's tiles). The other continent's images are made once and kept.
+

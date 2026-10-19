@@ -578,6 +578,80 @@ function ns.DrawGrid()
 	end
 end
 
+-- The other continents on Blizzard's world map (World.lua), drawn at their places round the map shown, so
+-- zoomed out the 2D map shows Kalimdor and the Eastern Kingdoms side by side (since 2026-10-19): each one's
+-- overview images, and its minimap tiles once close enough. Its grid is the map shown's by a shift and a
+-- scale within 0.4 % of 1 (ns.WorldGridOn).
+local peerAtlas = {} -- map -> its overview textures
+local peerShown = {} -- maps drawn round the map shown last time
+local function LayoutPeer(p, w, h, wanted)
+	local m, L = Maps[p], ns.WorldLayout
+	local kx, ky = L[p].ax / L[view.map].ax, L[p].ay / L[view.map].ay -- a tile of p, in tiles of the map shown
+	local list = peerAtlas[p]
+	if not list then
+		list = {}
+		for i, a in ipairs(m.atlases) do
+			local t = canvas:CreateTexture(nil, "ARTWORK", nil, 0)
+			t:SetTexture(ADDON_PATH .. "Overview\\" .. a.file .. "." .. (ns.OverviewExt or "jpg"))
+			t:SetTexCoord(0, a.cols * OverviewPx / a.w, 0, a.rows * OverviewPx / a.h)
+			t.atlas = a
+			list[i] = t
+		end
+		peerAtlas[p] = list
+	end
+	for _, t in ipairs(list) do
+		local a = t.atlas
+		local gx, gy = ns.WorldGridOn(p, a.x0, a.y0, view.map)
+		PlaceRegion(t, gx, gy, a.cols * kx, a.rows * ky)
+		t:Show()
+	end
+	if view.scale >= LIVE_MIN_SCALE then
+		local x0, y0 = ns.WorldGridOn(view.map, view.cx - w / 2 / view.scale, view.cy - h / 2 / view.scale, p)
+		local x1, y1 = ns.WorldGridOn(view.map, view.cx + w / 2 / view.scale, view.cy + h / 2 / view.scale, p)
+		for y = max(m.minY, floor(y0)), min(m.maxY, floor(y1)) do
+			for x = max(m.minX, floor(x0)), min(m.maxX, floor(x1)) do
+				local fdid = m.tiles[y * 64 + x]
+				if fdid then
+					local key = (p + 1) * 4096 + y * 64 + x -- (the map shown's own tiles are 0 .. 4095)
+					wanted[key] = true
+					local t = liveTiles[key]
+					if not t then
+						t = AcquireLive()
+						t:SetTexture(fdid)
+						t:SetTexCoord(0, 1, 0, 1)
+						liveTiles[key] = t
+					end
+					local gx, gy = ns.WorldGridOn(p, x, y, view.map)
+					PlaceRegion(t, gx, gy, kx, ky)
+					t:Show()
+				end
+			end
+		end
+	end
+end
+
+ns.peerAtlasOf = function(p) return peerAtlas[p] end -- (for the tests)
+ns.atlasTexture = function(i) return atlasTextures[i] end
+
+-- Panning or zooming onto another continent of the world map: the view's map becomes that one, said in
+-- its own grid so nothing moves on screen (its quests, zone names and tiles are then the ones shown).
+function ns.WorldSwitch()
+	local L = ns.WorldLayout
+	if view.follow or not (L and L[view.map] and ns.WorldNearest) then return false end
+	local m = ns.WorldNearest(view.map, view.cx, view.cy)
+	if m == view.map or not Maps[m] then return false end
+	local gx, gy = ns.WorldGridOn(view.map, view.cx, view.cy, m)
+	ns.Log("MAP", "2D map %s -> %s (panned onto it)", tostring(view.map), tostring(m))
+	view.scale = view.scale * L[m].ax / L[view.map].ax
+	ReleaseAllLive()
+	view.map = m
+	ns.db.map, ns.db.scale = m, view.scale
+	view.cx, view.cy = gx, gy
+	SetupAtlases()
+	if ns.UpdateTitle then ns.UpdateTitle() end
+	return true
+end
+
 function ns.Layout()
 	local m = Maps[view.map]
 	if not m then return end
@@ -613,6 +687,20 @@ function ns.Layout()
 			end
 		end
 	end
+	-- the other continents of the world map, round this one
+	local L = ns.WorldLayout
+	local here = L and L[view.map]
+	for p in pairs(peerShown) do
+		if not (here and L[p]) or p == view.map then
+			for _, t in ipairs(peerAtlas[p] or {}) do t:Hide() end
+			peerShown[p] = nil
+		end
+	end
+	if here then
+		for p in pairs(L) do
+			if p ~= view.map and Maps[p] then LayoutPeer(p, w, h, wanted); peerShown[p] = true end
+		end
+	end
 	for key in pairs(liveTiles) do
 		if not wanted[key] then ReleaseLive(key) end
 	end
@@ -641,8 +729,14 @@ function ns.UpdatePlayer()
 	local mapID, gx, gy, facing = ns.PlayerPosition()
 	-- following you onto another map (a boat, a portal): the map goes with you
 	if view.follow and mapID ~= nil and mapID ~= view.map and Maps[mapID] then return ns.ShowMap(mapID, true) end
-	if mapID ~= nil and mapID == view.map then
-		if view.follow then
+	local on = mapID ~= nil and mapID == view.map
+	if not on and mapID ~= nil and ns.WorldGridOn and Maps[mapID] then
+		-- you on the other continent of the world map: your arrow at your place round this one
+		local wx, wy = ns.WorldGridOn(mapID, gx, gy, view.map)
+		if wx then gx, gy, on = wx, wy, true end
+	end
+	if on then
+		if view.follow and mapID == view.map then
 			if math.abs(gx - view.cx) > 1e-6 or math.abs(gy - view.cy) > 1e-6 then
 				view.cx, view.cy = gx, gy
 				return ns.Layout() -- Layout calls back here with the view centred
@@ -769,6 +863,7 @@ canvas:SetScript("OnMouseDown", function(self, button)
 			view.cx = view.cx - (x - lx) / view.scale
 			view.cy = view.cy - (y - ly) / view.scale
 			lx, ly = x, y
+			ns.WorldSwitch()
 			ns.Layout()
 		end
 	end)
@@ -783,6 +878,7 @@ function ns.ZoomAt(px, py, factor)
 		local w, h = canvas:GetSize()
 		view.cx = gx - (px - w / 2) / view.scale
 		view.cy = gy - (py - h / 2) / view.scale
+		ns.WorldSwitch()
 	end
 	ns.db.scale = view.scale
 	ns.Layout()
@@ -826,7 +922,8 @@ frame:SetScript("OnUpdate", function(_, elapsed)
 	else
 		-- where you are: subzone and the usual map coordinates
 		local mapID = ns.PlayerPosition()
-		footer:SetText(mapID == view.map and ns.WhereText() or "")
+		local L = ns.WorldLayout
+		footer:SetText((mapID == view.map or (mapID and L and L[mapID] and L[view.map])) and ns.WhereText() or "")
 	end
 end)
 
@@ -1107,6 +1204,13 @@ function ns.SelfTest()
 	Report("data: %d maps, %d tiles, overview %d px per tile (.%s), interface %s", nMaps, nTiles, OverviewPx, ns.OverviewExt or "jpg", tostring((select(4, GetBuildInfo()))))
 	Report("modes: %s; opening here picks %s%s", table.concat(ns.AvailableModes(), ", "), ns.modeNames[openMode] or openMode, auto and " (GPS cannot show you here)" or "")
 	if ns.MapSelfTest then ns.MapSelfTest(Report) end
+	-- the world map's layout (World.lua): from the game's C_Map, or the classic numbers where it gives none
+	if ns.WorldLayout then
+		local names, wi = {}, ns.WorldLayoutInfo
+		for m, e in pairs(ns.WorldLayout) do names[#names + 1] = ("%s (scale %.4f)"):format(e.name, e.ax) end
+		table.sort(names)
+		Report("world map: %s layout%s; side by side on the 2D map: %s", wi.source == "game" and "the game's" or "the classic", wi.why and (" (" .. wi.why .. ")") or "", table.concat(names, ", "))
+	end
 	if ns.quests then ns.quests.SelfTest(Report) end
 	if ns.compat then ns.compat.SelfTest(Report) end
 	-- Position and axis order: UnitPosition against the world position Blizzard's map API gives.
@@ -1153,7 +1257,7 @@ function ns.SelfTest()
 		for key, t in pairs(liveTiles) do
 			n = n + 1
 			if t.IsObjectLoaded and t:IsObjectLoaded() then loaded = loaded + 1 end
-			if t.GetTextureFileID and t:GetTextureFileID() ~= m.tiles[key] then wrong = wrong + 1 end
+			if key < 4096 and t.GetTextureFileID and t:GetTextureFileID() ~= m.tiles[key] then wrong = wrong + 1 end -- (the other continent's: keys from 4096)
 		end
 		Report("live minimap tiles: %d of %d report loaded%s", loaded, n, wrong > 0 and (", " .. wrong .. " show an unexpected file ID") or "")
 		local shown, ok = 0, 0
