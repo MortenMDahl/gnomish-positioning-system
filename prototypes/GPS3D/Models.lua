@@ -38,10 +38,11 @@ local SWAP_LIMIT = 40    -- actors given a new model per choice
 local WMO_WAIT = 8       -- seconds the building check waits for a WMO to load
 local LOAD_WAIT = 10     -- a model not loaded after this long counts as failed
 local POOL_LIMIT = 3000  -- actors at most
+local UNDRAWN_REACH = 3500 -- buildings not drawn are listed this far round the view (past where building blocks are drawn)
 local OFF = 131072
 local WMO_PROBE, M2_PROBE = 106965, 189927 -- the Elwynn farmhouse (a building), an Elwynn tree
 
-ns.modelDefaults = { buildingModels = "game", props = true, caves = true, modelCount = 250, modelRange = 600, modelPx = 6 }
+ns.modelDefaults = { buildingModels = "game", props = false, caves = true, modelCount = 250, modelRange = 600, modelPx = 6 }
 local function Get(key)
 	local v = ns.DB()[key]
 	if v == nil then return ns.modelDefaults[key] end
@@ -152,6 +153,7 @@ local M = {
 }
 ns.modelState = M
 local candSrc, candIdx, candScore, candWmo, order, need = {}, {}, {}, {}, {}, {}
+local bigX, bigY, bigR = {}, {}, {} -- (big buildings chosen this time, reaching past Model distance)
 local function ByScore(a, b) return candScore[a] > candScore[b] end
 
 local function BuildKey()
@@ -329,10 +331,34 @@ local function Select()
 		candScore[n] = wmo and px + 1e9 or px
 		order[n] = n
 	end
+	local nb = 0 -- big buildings chosen reaching past Model distance (bigX, bigY, bigR)
 	if showB then
 		local w, caves = WmoList(map), Get("caves")
 		for i = 1, w.n do
 			if caves or not pal.cave[w.mi[i]] then Consider(w, i, true, R + pal.radius[w.mi[i]] * w.sc[i]) end
+		end
+		-- a big building chosen reaching past Model distance (Nordrassil on Mount Hyjal, Stormwind): the
+		-- buildings standing on it further out are chosen too, so all of it is the game's there (its
+		-- simplified shapes give way under it, ModelsCover) and nothing on it is left out (2026-10-19)
+		for k = 1, n do
+			if candWmo[k] then
+				local t, i = candSrc[k], candIdx[k]
+				local r = pal.radius[t.mi[i]] * t.sc[i]
+				local ox, oy = t.x[i] - cam.x, t.y[i] - cam.y
+				if ox * ox + oy * oy > (R - r) * (R - r) or r > R then nb = nb + 1; bigX[nb], bigY[nb], bigR[nb] = t.x[i], t.y[i], r end
+			end
+		end
+		if nb > 0 then
+			for i = 1, w.n do
+				local r = pal.radius[w.mi[i]] * w.sc[i]
+				local ox, oy = w.x[i] - cam.x, w.y[i] - cam.y
+				if ox * ox + oy * oy > (R + r) * (R + r) and (caves or not pal.cave[w.mi[i]]) then
+					for b = 1, nb do
+						local dx, dy, rr = w.x[i] - bigX[b], w.y[i] - bigY[b], bigR[b] + r
+						if dx * dx + dy * dy <= rr * rr then Consider(w, i, true, math.huge) break end
+					end
+				end
+			end
 		end
 	end
 	if wantP then
@@ -416,6 +442,30 @@ local function Select()
 	-- the simplified blocks give way inside Model distance once the game's buildings are known to load
 	M.coverOn = showB and M.wmo == "yes"
 	M.coverMap, M.coverX, M.coverY, M.coverR = map, cam.x, cam.y, R
+	-- the buildings around the view the game is not drawing (further off than Model distance plus their
+	-- radius): beyond Model distance, the simplified shapes they stand on stay even under a big building the
+	-- game draws (ModelsCover; a big building's footprint is a circle of its radius round its origin, and
+	-- Stormwind's, 853 yd, reaches Goldshire's farms)
+	local undrawn = {}
+	if M.coverOn then
+		local w = WmoList(map)
+		for i = 1, w.n do
+			local r = pal.radius[w.mi[i]] * w.sc[i]
+			local ox, oy, lim = w.x[i] - cam.x, w.y[i] - cam.y, UNDRAWN_REACH + r
+			local d2 = ox * ox + oy * oy
+			-- (left out for being too far; one left out for being tiny on screen or out of view goes, as inside Model distance)
+			if d2 < lim * lim and d2 > (R + r) * (R + r) and not M.byId[w.id[i]] then
+				-- (one on a big building was considered with it, and left out only for being tiny or out of view)
+				local onBig = false
+				for b = 1, nb do
+					local dx, dy, rr = w.x[i] - bigX[b], w.y[i] - bigY[b], bigR[b] + r
+					if dx * dx + dy * dy <= rr * rr then onBig = true break end
+				end
+				if not onBig then undrawn[#undrawn + 1] = { w.x[i], w.y[i], r } end
+			end
+		end
+	end
+	M.undrawn = undrawn
 	local ms = debugprofilestop() - t0
 	local p = M.perf
 	p.picks, p.ms, p.cands = p.picks + 1, p.ms + ms, p.cands + n
@@ -425,13 +475,17 @@ ns.SelectModels = Select
 
 -- Where the simplified shapes must stay inside the model distance: buildings chosen but not loaded
 -- (yet, or ever) and buildings that never load (left out of the choice): footprints { x, y, radius }.
+-- And the footprints of the buildings the game is drawing (loaded): beyond the model distance the
+-- simplified shapes under them give way too (M.drawn, ModelsCover).
 Holes = function()
-	local holes = {}
+	local holes, drawn = {}, {}
 	for _, e in ipairs(M.pool) do
-		if e.id and e.wmo and (not e.loaded or e.failed) then holes[#holes + 1] = { e.x, e.y, e.r } end
+		if e.id and e.wmo then
+			if not e.loaded or e.failed then holes[#holes + 1] = { e.x, e.y, e.r } else drawn[#drawn + 1] = { e.x, e.y, e.r } end
+		end
 	end
 	for _, h in ipairs(M.badWmo or {}) do holes[#holes + 1] = h end
-	M.holes = holes
+	M.holes, M.drawn = holes, drawn
 end
 
 -- Loading states: what has loaded, what failed; the building check's answer.
@@ -489,18 +543,32 @@ driver:SetScript("OnUpdate", function()
 end)
 
 -- Is a building block (x0 west edge, y1 north edge) inside the area where the game's buildings are
--- drawn instead (the whole block within Model distance of the middle of the last choice)?
+-- drawn instead? The whole block within Model distance of the middle of the last choice, or (since
+-- 2026-10-19) its middle under a building the game is drawing and no building it is not drawing on it: a building is chosen out to Model
+-- distance plus its own radius, so a big one (Nordrassil on Mount Hyjal: 559 yd across the ground,
+-- 1,207 yd tall) was drawn by the game and as simplified shapes where it reached past Model distance.
+-- Never where a building that is not drawn (loading, or never loads) stands.
 ns.ModelsCover = function(x0, y1)
 	if not M.coverOn or M.coverMap ~= ns.cam.map then return false end
 	local B = ns.BLOCK
-	local ex, ey = max(abs(x0 - M.coverX), abs(x0 + B - M.coverX)), max(abs(y1 - M.coverY), abs(y1 - B - M.coverY))
-	if ex * ex + ey * ey > M.coverR * M.coverR then return false end
-	-- not where a building that is not drawn (loading, or never loads) stands
 	for _, h in ipairs(M.holes or {}) do
 		local nx, ny = min(max(h[1], x0), x0 + B), min(max(h[2], y1 - B), y1)
 		if (nx - h[1]) ^ 2 + (ny - h[2]) ^ 2 <= h[3] * h[3] then return false end
 	end
-	return true
+	local ex, ey = max(abs(x0 - M.coverX), abs(x0 + B - M.coverX)), max(abs(y1 - M.coverY), abs(y1 - B - M.coverY))
+	if ex * ex + ey * ey <= M.coverR * M.coverR then return true end
+	local mx, my = x0 + B / 2, y1 - B / 2
+	for _, d in ipairs(M.drawn or {}) do
+		if (mx - d[1]) ^ 2 + (my - d[2]) ^ 2 <= d[3] * d[3] then
+			-- unless a building the game is not drawing stands on the block too
+			for _, u in ipairs(M.undrawn or {}) do
+				local nx, ny = min(max(u[1], x0), x0 + B), min(max(u[2], y1 - B), y1)
+				if (nx - u[1]) ^ 2 + (ny - u[2]) ^ 2 <= u[3] * u[3] then return false end
+			end
+			return true
+		end
+	end
+	return false
 end
 
 ------------------------------------------------------------------------------------------------

@@ -1026,6 +1026,7 @@ end
 -- Per-frame work tables, reused (no garbage): tile candidates, building-block candidates, budget per level
 local cands = {}  -- cands[i] = { tx, ty, key, d, toTarget, step }
 local blist, bpool = {}, {}  -- blist[i] = { c, bi, d, x0, y1 } (the tables live in bpool; blist is the sorted view)
+ns.blockList = blist -- (for the tests: the building blocks drawn this frame)
 local function ByDistance(p, q) return p.d < q.d end
 
 -- Does a box (x0..x1 east, y0..y1 north, lo..hi up) reach into the view?

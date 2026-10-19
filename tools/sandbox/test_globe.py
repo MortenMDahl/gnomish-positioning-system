@@ -658,11 +658,17 @@ def c_speed():
     check('frame time on the planet no slower than the ground at 12,000 yd (native Lua)', max(res.values()) <= max(flat * 1.5, 4), f'planet {", ".join(f"{k} {v:.1f} ms" for k, v in res.items())}; ground at 12,000 yd {flat:.1f} ms')
     # crossing the hand-over back and forth: no frame much slower than the others (nothing rebuilt each time)
     at(HANDOVER * 0.97, 0, 33 * TILE, -44 * TILE); at(HANDOVER * 1.03); at(HANDOVER * 0.97)  # first crossing builds once
-    worst = 0
-    for k in range(6):
-        for d in (HANDOVER * 1.03, HANDOVER * 0.97):
-            t0 = time.perf_counter(); at(d); worst = max(worst, (time.perf_counter() - t0) * 1000)
-    check('crossing the hand-over back and forth: every frame quick (the planet keeps its images between crossings)', worst <= max(flat * 2, 6), f'worst crossing frame {worst:.1f} ms (ground at 12,000 yd {flat:.1f} ms)')
+    # (three sweeps of six crossings each way, the best sweep's worst frame: a real rebuild costs every sweep, a
+    # one-off pause of the machine does not, and made this check fail now and then)
+    sweeps = []
+    for _ in range(3):
+        worst = 0
+        for k in range(6):
+            for d in (HANDOVER * 1.03, HANDOVER * 0.97):
+                t0 = time.perf_counter(); at(d); worst = max(worst, (time.perf_counter() - t0) * 1000)
+        sweeps.append(worst)
+    worst = min(sweeps)
+    check('crossing the hand-over back and forth: every frame quick (the planet keeps its images between crossings)', worst <= max(flat * 2, 6), f'worst crossing frame {worst:.1f} ms, best of 3 sweeps ({", ".join(f"{w:.1f}" for w in sweeps)}) (ground at 12,000 yd {flat:.1f} ms)')
     at(60000)
     for _ in range(10): cam.yaw += 1; ns.Render()
     m0 = gc()

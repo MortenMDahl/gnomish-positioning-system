@@ -29,6 +29,8 @@ MUTATIONS = {
     'swaps': (('if swaps >= SWAP_LIMIT then later = later + 1 else', 'if false then later = later + 1 else'), 'a jump'),
     'holes': (('if (nx - h[1]) ^ 2 + (ny - h[2]) ^ 2 <= h[3] * h[3] then return false end', 'if false then return false end'), 'a building that never loads'),
     'refused': (('elseif M.wmoSets > 0 and now - M.wmoSince > WMO_WAIT then', 'elseif false then'), 'the game refusing buildings'),
+    'bigbuilding': (('if (mx - d[1]) ^ 2 + (my - d[2]) ^ 2 <= d[3] * d[3] then', 'if false then'), 'a big building'),
+    'undrawn': (('if (nx - u[1]) ^ 2 + (ny - u[2]) ^ 2 <= u[3] * u[3] then return false end', 'if false then return false end'), 'under a big building'),
 }
 MUT = os.environ.get('GPS_MUTATION')
 QUIET = '--quiet' in sys.argv
@@ -38,7 +40,7 @@ def check(name, ok, detail=''):
     return bool(ok)
 
 class Game:
-    def __init__(self, patch=None, with_models=True, wmo=True, before=False):
+    def __init__(self, patch=None, with_models=True, wmo=True, before=False, props=None):
         if MUT and not patch: patch = MUTATIONS[MUT][0]
         OLD = os.path.join(ROOT, 'notes', 'rollback-before-game-models')
         self.L = lupa54.LuaRuntime(); G = self.G = self.L.globals()
@@ -62,6 +64,8 @@ class Game:
         G.SANDBOX_PLAYER(-9464, 62, 0, 0, 1.0, 'Elwynn Forest', 'Goldshire', 1429, 0.42, 0.65)
         G.SANDBOX_FIRE('PLAYER_LOGIN'); G.SANDBOX_FIRE('PLAYER_ENTERING_WORLD', True, False); self.tick(2)
         self.ns = G.SANDBOX.namespaces['GPS3D']
+        if props is not None:  # (props and trees are off by default since 2026-10-19; checks that count them turn them on)
+            self.L.eval('function(v) GPS3D_DB = GPS3D_DB or {}; GPS3D_DB.props = v end')(props); self.ns.ModelsChanged()
         self.chat()
     def tick(self, n=1, dt=1 / 30):
         for _ in range(n): self.G.SANDBOX_TICK(dt, W, H)
@@ -188,6 +192,13 @@ check('data: the buildings list holds every building of the map', int(wl.n) == s
 GX, GY = 32.3 * TILE, -49.5 * TILE
 g.free_view(GX, GY, 300)
 g.tick(15)
+# props and trees are off by default (2026-10-19): a fresh game shows the buildings only
+acts0 = g.actors()
+n_props0 = sum(1 for a in acts0 if find(a) and not find(a)['wmo'])
+n_wmo0 = sum(1 for a in acts0 if find(a) and find(a)['wmo'])
+check('props and trees off by default: a fresh game draws no props or trees, the buildings still', g.G.GPS3D_DB.props is None and not ns.ModelSetting('props') and n_props0 == 0 and n_wmo0 > 0,
+      f'saved {g.G.GPS3D_DB.props}, {n_props0} props, {n_wmo0} buildings')
+g.G.GPS3D_DB.props = True; ns.ModelsChanged(); g.tick(15)
 R, PX, COUNT = int(ns.ModelSetting('modelRange')), float(ns.ModelSetting('modelPx')), int(ns.ModelSetting('modelCount'))
 acts = g.actors()
 unmatched = [a for a in acts if not find(a)]
@@ -276,9 +287,12 @@ log, drawn_game = cover_frame()
 B = 1600 / 3 / 8
 def far_corner(x0, y1, cx, cy): return math.hypot(max(abs(x0 - cx), abs(x0 + B - cx)), max(abs(y1 - cy), abs(y1 - B - cy)))
 hidden = [(x0, y1) for x0, y1, r in log if r]
-wrong = [b for b in hidden if far_corner(b[0], b[1], st.coverX, st.coverY) > R + 1e-6]
+# (beyond the model distance a block gives way only where its middle is under a building the game draws, since 2026-10-19)
+drawn_fp = [(float(d[1]), float(d[2]), float(d[3])) for d in (st.drawn.values() if st.drawn else [])]
+def under_drawn(x0, y1): return any(math.hypot(x0 + B / 2 - dx, y1 - B / 2 - dy) <= dr for dx, dy, dr in drawn_fp)
+wrong = [b for b in hidden if far_corner(b[0], b[1], st.coverX, st.coverY) > R + 1e-6 and not under_drawn(b[0], b[1])]
 kept_inside = [(x0, y1) for x0, y1, r in log if not r and far_corner(x0, y1, st.coverX, st.coverY) <= R - 1]
-check('the game\'s buildings shown: building blocks wholly within the model distance give way, the others stay', hidden and not wrong and not kept_inside and drawn_game > 0,
+check('the game\'s buildings shown: building blocks wholly within the model distance give way (and beyond it those under a building the game draws), the others stay', hidden and not wrong and not kept_inside and drawn_game > 0,
       f'{len(hidden)} blocks give way, {len(wrong)} of them reach past {R} yd, {len(kept_inside)} inside kept; {drawn_game} blocks still drawn')
 # a building that is not drawn (never loads, or still loading): its simplified shape stays
 def overlaps(x0, y1, cx_, cy_, r_):
@@ -336,7 +350,7 @@ G.GPS3D_DB.caves = None; ns.ModelsChanged()
 g.free_view(GX, GY, 300); g.tick(10)
 
 # ---- M6: the building check, the game refusing WMOs ----
-g2 = Game(wmo=False)
+g2 = Game(wmo=False, props=True)
 ns2, st2 = g2.ns, g2.ns.modelState
 g2.open3d(); g2.free_view(GX, GY, 500); g2.tick(6)
 testing = str(st2.wmo)
@@ -369,7 +383,7 @@ g2.G.SlashCmdList.GPS3D('models wmo'); g2.tick(40)
 check('the saved answer is used for the same build; /gps3d models wmo checks again (and now finds them)', still_no == 'no' and st2.wmo == 'yes', f'{still_no} -> {st2.wmo}')
 
 # ---- M7: loading and failing ----
-g3 = Game()
+g3 = Game(props=True)
 g3.G.SANDBOX.modelLoadDelay = 1.0
 g3.open3d(); g3.free_view(GX, GY, 300); g3.tick(8)
 loading = int(g3.ns.modelState.loading)
@@ -469,6 +483,71 @@ for k in range(30):
 picks, ms, worst = int(st.perf.picks), float(st.perf.ms), float(st.perf.worst)
 check('choices are made at most 10 times a second while the view keeps turning', picks <= 30 * 4 / 30 * 10 + 1 and picks > 0, f'{picks} choices in 4 s')
 print(f'COST: choice {ms / max(picks, 1):.2f} ms average, {worst:.2f} ms worst over {picks} choices (tilted, 400 yd, Goldshire); {st.shown} shown, {len(st.pool)} actors')
+
+# ---- a big building reaching past Model distance (2026-10-19): Nordrassil on Mount Hyjal (Kalimdor, 559 yd
+# across the ground, 1,207 yd tall). Viewed from 500 yd east of its middle, the game draws it whole, so no
+# simplified shape may stay under it (before the fix, 86 blocks did: the tree twice)
+TREE_X, TREE_Y, TREE_FD = 38.6 * TILE, -21.8 * TILE, 7660554
+ns.SetCamMode('free'); ns.SetTopDown(True, True)
+ns.cam.map, ns.cam.x, ns.cam.y, ns.cam.dist, ns.cam.yaw = 1, TREE_X + 500, TREE_Y, 1500, 0
+ns.cam.th = ns.GroundHeight(ns.cam.x, ns.cam.y)
+for _ in range(3): ns.Render(); g.tick(60)
+tree = [e for e in st.pool.values() if e.id is not None and e.fdid == TREE_FD]
+tr = float(tree[0].r) if tree else 0
+if tree: TREE_X, TREE_Y = float(tree[0].x), float(tree[0].y)  # (its exact place, from the data)
+under = g.L.eval('''function(tx, ty, r)
+  local ns = SANDBOX.namespaces.GPS3D
+  local B, n, all = ns.BLOCK, 0, 0
+  for _, e in ipairs(ns.blockList) do
+    all = all + 1
+    local mx, my = e.x0 + B / 2, e.y1 - B / 2
+    if (mx - tx) ^ 2 + (my - ty) ^ 2 <= r * r then n = n + 1 end
+  end
+  return n
+end''')(TREE_X, TREE_Y, tr)
+check('a big building the game draws (Nordrassil, reaching past Model distance): no simplified shape under it, not the tree twice',
+      tree and tree[0].loaded and tree[0].actor._shown and tr > 500 and under == 0, f'tree shown {bool(tree)}, radius {tr:.0f} yd, {under} simplified blocks under it')
+ns.cam.map = 0
+# ... but a big building's footprint is a circle round its origin (Stormwind's, 853 yd, reaches Goldshire's
+# farms): beyond Model distance, a block another building stands on that the game is not drawing keeps its
+# simplified shape. Goldshire with Model distance 200: every block hidden beyond it has no building on it that
+# the game does not draw, and some are kept for one
+G.GPS3D_DB.modelRange = 200; ns.ModelsChanged()
+g.free_view(GX, GY, 500)
+for _ in range(3): ns.Render(); g.tick(30)
+res = g.L.eval('''function()
+  local ns = SANDBOX.namespaces.GPS3D; local M = ns.modelState
+  local B = ns.BLOCK
+  local function over(list, x0, y1)
+    for _, u in ipairs(list or {}) do
+      local nx, ny = math.min(math.max(u[1], x0), x0 + B), math.min(math.max(u[2], y1 - B), y1)
+      if (nx - u[1]) ^ 2 + (ny - u[2]) ^ 2 <= u[3] * u[3] then return true end
+    end
+  end
+  local function middleUnder(list, x0, y1)
+    local mx, my = x0 + B / 2, y1 - B / 2
+    for _, d in ipairs(list or {}) do if (mx - d[1]) ^ 2 + (my - d[2]) ^ 2 <= d[3] * d[3] then return true end end
+  end
+  local hiddenBad, keptForUndrawn, hiddenBeyond = 0, 0, 0
+  -- every block of the tiles round the view
+  for ty = math.floor(-(M.coverY + 1500) / ns.TILE), math.floor(-(M.coverY - 1500) / ns.TILE) do
+    for tx = math.floor((M.coverX - 1500) / ns.TILE), math.floor((M.coverX + 1500) / ns.TILE) do
+      for bi = 0, 63 do
+        local x0, y1 = tx * ns.TILE + (bi % 8) * B, -ty * ns.TILE - math.floor(bi / 8) * B
+        local ex, ey = math.max(math.abs(x0 - M.coverX), math.abs(x0 + B - M.coverX)), math.max(math.abs(y1 - M.coverY), math.abs(y1 - B - M.coverY))
+        if ex * ex + ey * ey > M.coverR * M.coverR and middleUnder(M.drawn, x0, y1) and not over(M.holes, x0, y1) then
+          local cover = ns.ModelsCover(x0, y1)
+          if cover then hiddenBeyond = hiddenBeyond + 1; if over(M.undrawn, x0, y1) then hiddenBad = hiddenBad + 1 end
+          elseif over(M.undrawn, x0, y1) then keptForUndrawn = keptForUndrawn + 1 end
+        end
+      end
+    end
+  end
+  return hiddenBad, keptForUndrawn, hiddenBeyond, #(M.undrawn or {})
+end''')()
+check('under a big building the game draws, beyond Model distance: a block with a building the game does not draw keeps its shape (Goldshire, Stormwind\'s footprint)', res[0] == 0 and res[1] > 0 and res[2] > 0,
+      f'{res[2]} blocks give way beyond Model distance, {res[0]} of them with a building the game does not draw; {res[1]} kept for one; {res[3]} buildings not drawn round the view')
+G.GPS3D_DB.modelRange = None; ns.ModelsChanged()
 
 # ---- mutations: each must make its check fail ----
 if not MUT:

@@ -60,6 +60,9 @@ places = [
     ('Stormwind, Trade District', -8830, 640, 0), ('Stormwind, cathedral', -8520, 850, 0), ('Undercity ruins (Lordaeron)', 1800, 230, 0),
     ('Stratholme (outside)', 3300, -3380, 0), ('Thunder Bluff', -1280, 130, 1), ('Darnassus', 9950, 2280, 1),
 ]
+# (the simplified building shapes are what this measures: with the game's buildings loading, as in the sandbox,
+# the game draws Stormwind and Orgrimmar, each one building model, and their shapes give way, Models.lua)
+G.GPS3D_DB.buildingModels = 'simple'; ns2.ModelsChanged()
 BUILDINGS = []
 for name, X, Y, m in places:
     place(X, Y, m, 1.0, name)
@@ -78,6 +81,7 @@ for name, X, Y, m in places:
 print('reach', [(b[0], round(b[5]), b[6]) for b in BUILDINGS])
 check('buildings load further: blocks drawn beyond 400 yd from the view centre in some places, far level used', max(b[5] for b in BUILDINGS) > 400 and sum(b[6][2] for b in BUILDINGS) > 0, f'max reach {max(b[5] for b in BUILDINGS):.0f} yd')
 check('buildings drawn in the cities', all(b[1] > 0 for b in BUILDINGS if b[0].startswith(('Stormwind', 'Orgrimmar', 'Undercity', 'Thunder', 'Booty', 'Darnassus'))), str([(b[0], b[1]) for b in BUILDINGS]))
+G.GPS3D_DB.buildingModels = None; ns2.ModelsChanged()
 # continent views from far away
 for m, name in [(0, 'Eastern Kingdoms'), (1, 'Kalimdor')]:
     place(-8958.3 if m == 0 else 1630, -190 if m == 0 else -4380, m)

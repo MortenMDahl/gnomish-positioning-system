@@ -188,6 +188,9 @@ g.set('GPS3D_TopDown', False); g.tick(30)
 check('Look straight down off: tilts back, saved', not ns2.IsTopDown() and ns2.cam.pitch < 89 and DB3().topDown is False, f'pitch {ns2.cam.pitch:.1f}')
 g.set('GPS3D_TopDown', True); g.tick(30)
 check('Look straight down on', ns2.IsTopDown() and abs(ns2.cam.pitch - 89.9) < 1e-6 and DB3().topDown is True)
+# (the simplified building shapes, which these two controls are about; with the game's buildings loading,
+# as in the sandbox, the game draws them here instead: Stormwind's one building model reaches Northshire)
+g.set('GPS3D_BuildingModels', 'simple'); g.tick(10)
 ns2.cam.dist = 300; g.tick(5); ns2.Render(); g.tick(5)
 d_on, dt_on = st.detail, st.detailTris
 g.set('GPS3D_Buildings', False); g.tick(5)
@@ -197,6 +200,7 @@ check('Buildings: off draws none, on draws them, saved', dt_on > 0 and d_off == 
 g.set('GPS3D_BuildingBudget', 1000); g.tick(20)
 check('Building detail 1000: at most 1000 building triangles, saved', 0 < st.detailTris <= 1000 and DB3().buildings == 1000, f'{st.detailTris} (was {dt_on})')
 g.set('GPS3D_BuildingBudget', 4000); g.tick(20)
+g.set('GPS3D_BuildingModels', 'game'); g.tick(10)
 # the game's models (Models.lua): the five controls
 def shown_models():
     out = []
@@ -206,6 +210,10 @@ def shown_models():
             out.append((bool(w_), a_._pos[1], a_._pos[2]))
     return out
 ns2.cam.dist = 300; g.tick(10)
+md = shown_models()
+check('Props and trees: off by default (none drawn, the buildings still)', DB3().props is None and not any(not w for w, _, _ in md) and any(w for w, _, _ in md),
+      f'{sum(1 for w, _, _ in md if not w)} props, {sum(1 for w, _, _ in md if w)} buildings')
+g.set('GPS3D_Props', True); g.tick(10)
 m0 = shown_models()
 g.set('GPS3D_Props', False); g.tick(10); m1 = shown_models()
 g.set('GPS3D_Props', True); g.tick(10)
