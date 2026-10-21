@@ -5,7 +5,7 @@
 # about 1 MB); off again; kept over a /reload (saved variables) with a reminder; the copy window;
 # clear; and the switch on the settings page.
 # Usage: python test_debug.py   (fill site/addons first, as for test_world.py)
-import lupa.lua54 as lupa54, os, re
+import lupa.lua54 as lupa54, os, re, json
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITE = os.path.join(HERE, 'site')
 ROOT = os.path.join(HERE, '..', '..')
@@ -79,7 +79,8 @@ check('traditional map: the canvas made with all 27 data providers', g.has(new, 
 check('header: the quests shown and the zones known per map', g.has(L0, 'SESSION', 'quests: shown true; 7 in the list; zones known: map 0: '), '')
 n = len(g.lines())
 G.SANDBOX_SETTING_SET('GPS3D_Marker', 'arrow'); g.tick(2)
-G.SANDBOX_SETTING_CLICK('Gnomish Positioning System', 4); g.tick(2)
+reset_at = 1 + [c['name'] for c in json.loads(str(G.SANDBOX_SETTINGS()))[0]['controls']].index('Window')  # (the Reset button's place on the page)
+G.SANDBOX_SETTING_CLICK('Gnomish Positioning System', reset_at); g.tick(2)
 check('settings: a change and a button', g.has(g.since(n), 'SETTING', 'GPS3D_Marker = arrow') and g.has(g.since(n), 'SETTING', 'Window: Reset clicked'), '\n'.join(g.since(n)))
 g.slash('/gps 2d'); g.tick(5)
 pin = [p for p in [ns.quests.pins2D[i] for i in range(1, len(ns.quests.pins2D) + 1)] if p.IsShown(p) and p.gpsQuestID == 7][0]

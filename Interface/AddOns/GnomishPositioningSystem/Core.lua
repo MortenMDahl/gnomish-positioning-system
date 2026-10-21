@@ -23,7 +23,7 @@ local floor, ceil, min, max = math.floor, math.ceil, math.min, math.max
 local Maps = ns.Maps or {}
 local OverviewPx = ns.OverviewPx or 64
 
-local defaults = { point = { "CENTER", "CENTER", 0, 0 }, width = 900, height = 650, map = 0, follow = true, scale = 128, mode = "2D", autoTraditional = true, quests = true, addonMarkers = true }
+local defaults = { point = { "CENTER", "CENTER", 0, 0 }, width = 900, height = 650, map = 0, follow = true, scale = 128, mode = "2D", autoTraditional = true, quests = true, addonMarkers = true, mapKey = "blizzard", fullScreen = false }
 ns.defaults = defaults
 
 -- Values the game may hide from addons in some situations (Forever carries Midnight's "secret values").
@@ -192,12 +192,15 @@ local function RingButton(parent, tooltip, size)
 	icon:Hide()
 	b.label, b.icon, b.disc, b.ring = fs, icon, disc, ring
 	b.centreY = up
+	local fontFile, fontSize, fontFlags = fs:GetFont()
 	function b:SetLabel(t)
 		fs:SetText(t)
-		-- shrink a wide label (such as 90 degrees) to sit inside the ring's hole
-		fs:SetTextScale(1)
+		-- shrink a wide label (such as 90 degrees) to sit inside the ring's hole: a smaller font, not
+		-- SetTextScale, which in the game left the shrunk text about 1 px left of the ring's centre
+		-- (2D and 3D on the mode ring, 2026-10-21; it scales the text, not the frame round it)
+		if fontFile then fs:SetFont(fontFile, fontSize, fontFlags) end
 		local w = fs:GetStringWidth() or 0
-		fs:SetTextScale(w > RING * LABEL_FIT and RING * LABEL_FIT / w or 1)
+		if fontFile and w > RING * LABEL_FIT then fs:SetFont(fontFile, fontSize * RING * LABEL_FIT / w, fontFlags) end
 		fs:Show()
 		icon:Hide()
 	end
@@ -299,10 +302,16 @@ function ns.NextMode(name, step)
 	return list[(index - 1 + (step or 1)) % #list + 1]
 end
 
+-- Every window's controls (ApplyChrome's ui tables), so the top-right buttons and the resize grip of
+-- all of them follow the map-key choice and full screen (ns.UpdateChromes).
+ns.chromes = {}
+local TOP_BUTTON, GLOBE = 24, 26     -- close and full-screen buttons, and the globe ring, in px
+
 -- Dresses a window (a BackdropTemplate frame) and its map canvas in the GPS look and returns its
 -- controls: title, subtitle with prev/next, close, footer text, zoom in/out, the compass, the mode
 -- ring (modeSwitch, showing the mode the window is: "2D", "3D" or a folded map; click for the next
--- mode, right-click for the one before) and the Me ring, plus ui.SetRings(list) to lay out the column
+-- mode, right-click for the one before), the Me ring, and left of the close button the full-screen
+-- toggle (ui.fullScreen) and the map-key globe (ui.globe), plus ui.SetRings(list) to lay out the column
 -- of rings down the right edge (top to bottom; GPS3D adds its own after these three).
 -- opts.mode is "2D", "3D" or "Map"; opts.onMoved / opts.onSized are called after the user moves or
 -- resizes the window; opts.chromeLevel puts the controls at that frame level (the traditional map's
@@ -329,20 +338,24 @@ function ns.ApplyChrome(frame, canvas, opts)
 	Shade(chrome, true, 56)
 	Shade(chrome, false, 36)
 
-	-- Top band: drag to move the window; holds the title and the map switch.
+	-- Top band: drag to move the window (not in full screen); holds the title and the map switch.
 	local band = CreateFrame("Frame", nil, chrome)
 	band:SetPoint("TOPLEFT")
-	band:SetPoint("TOPRIGHT", -40, 0) -- leaves the close button and the rings their clicks
+	band:SetPoint("TOPRIGHT", -(6 + TOP_BUTTON + 1 + TOP_BUTTON + 2 + GLOBE + 4), 0) -- leaves the globe, full-screen and close buttons and the rings their clicks
 	band:SetHeight(46)
 	band:EnableMouse(true)
 	band:RegisterForDrag("LeftButton")
-	band:SetScript("OnDragStart", function() frame:StartMoving() end)
-	band:SetScript("OnDragStop", function() frame:StopMovingOrSizing(); if opts.onMoved then opts.onMoved() end end)
+	band:SetScript("OnDragStart", function() if not ns.IsFullScreen() then frame:StartMoving() end end)
+	band:SetScript("OnDragStop", function() frame:StopMovingOrSizing(); if opts.onMoved and not ns.IsFullScreen() then opts.onMoved() end end)
 	ui.band = band
 
+	-- the title runs to the band's right edge and is cut short there (a long zone name never reaches
+	-- under the buttons)
 	ui.title = band:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	ui.title:SetPoint("TOPLEFT", 10, -8)
+	ui.title:SetPoint("TOPRIGHT", -4, -8)
 	ui.title:SetJustifyH("LEFT")
+	ui.title:SetWordWrap(false)
 	ui.title:SetShadowOffset(1, -1)
 	-- < and > around the map's name: brass and a size up from the subtitle, so they read as buttons
 	ui.prev = TextButton(band, "<", "GameFontNormal", "Previous map")
@@ -358,7 +371,7 @@ function ns.ApplyChrome(frame, canvas, opts)
 
 	-- Close: Blizzard's own red close button art.
 	local close = CreateFrame("Button", nil, chrome)
-	close:SetSize(24, 24)
+	close:SetSize(TOP_BUTTON, TOP_BUTTON)
 	close:SetPoint("TOPRIGHT", -6, -6)
 	close:SetNormalAtlas("RedButton-Exit")
 	close:SetPushedAtlas("RedButton-exit-pressed")
@@ -368,6 +381,29 @@ function ns.ApplyChrome(frame, canvas, opts)
 	close:SetScript("OnLeave", function() GameTooltip_Hide() end)
 	close.tooltip = "Close"
 	ui.close = close
+
+	-- Full screen, next to close as on Blizzard's map: its maximize / minimize art (RedButton-Expand
+	-- and RedButton-Condense, MaximizeMinimizeButtonFrameTemplate in Forever's SharedUIPanelTemplates),
+	-- set by ns.UpdateChromes. Every mode shares it (ns.SetFullScreen).
+	local full = CreateFrame("Button", nil, chrome)
+	full:SetSize(TOP_BUTTON, TOP_BUTTON)
+	full:SetPoint("RIGHT", close, "LEFT", -1, 0)
+	full:SetHighlightAtlas("RedButton-Highlight", "ADD")
+	full:SetScript("OnClick", function() ns.SetFullScreen(not ns.IsFullScreen()) end)
+	full:SetScript("OnEnter", ShowTooltip)
+	full:SetScript("OnLeave", function() GameTooltip_Hide() end)
+	full.tooltip = function()
+		if ns.IsFullScreen() then return { "Full screen", "Click: back to the window's place and size" } end
+		return { "Full screen", "Click: fill the screen (every mode; remembered)" }
+	end
+	ui.fullScreen = full
+
+	-- The map-key globe: which map the game's map key opens (MapKey.lua); here a click makes it
+	-- Blizzard's map and switches to it. Gold while the map key opens GPS.
+	ui.globe = RingButton(chrome, function() return ns.mapkey and ns.mapkey.Tooltip(false) or "Map key" end, GLOBE)
+	ui.globe:SetIcon(MEDIA .. "Globe", 0.62)
+	ui.globe:SetPoint("RIGHT", full, "LEFT", -2, 0)
+	ui.globe:SetScript("OnClick", function() if ns.mapkey then ns.mapkey.UseBlizzard() end end)
 
 	-- The rings down the right edge, under the close button. Every window starts the column with the
 	-- same three, compass, mode and Me, so they stay under the mouse when you switch modes; the 3D
@@ -431,14 +467,42 @@ function ns.ApplyChrome(frame, canvas, opts)
 	grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 	grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
 	grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-	grip:SetScript("OnMouseDown", function() frame:StartSizing("BOTTOMRIGHT") end)
-	grip:SetScript("OnMouseUp", function() frame:StopMovingOrSizing(); if opts.onSized then opts.onSized() end end)
+	grip:SetScript("OnMouseDown", function() if not ns.IsFullScreen() then frame:StartSizing("BOTTOMRIGHT") end end)
+	grip:SetScript("OnMouseUp", function() frame:StopMovingOrSizing(); if opts.onSized and not ns.IsFullScreen() then opts.onSized() end end)
 	ui.grip = grip
+	ns.chromes[#ns.chromes + 1] = ui
+	ns.UpdateChromes()
 	return ui
 end
 
--- Puts a window where another one is, at the same size (for switching between 2D and 3D).
+-- Full screen (since 2026-10-21): the window fills the screen in every mode (anchored to UIParent's
+-- corners, so it follows a change of resolution or UI scale), cannot be moved or resized, and goes
+-- back to the saved place and size when left. The saved place and size are not touched while it is on.
+function ns.IsFullScreen()
+	return ns.db ~= nil and ns.db.fullScreen == true
+end
+
+-- The top-right buttons and the grip of every window: full screen's expand or condense art, the
+-- globe gold while the map key opens GPS.
+function ns.UpdateChromes()
+	local on = ns.IsFullScreen()
+	local gps = ns.db ~= nil and ns.db.mapKey == "gps"
+	for _, u in ipairs(ns.chromes) do
+		u.fullScreen:SetNormalAtlas(on and "RedButton-Condense" or "RedButton-Expand")
+		u.fullScreen:SetPushedAtlas(on and "RedButton-Condense-Pressed" or "RedButton-Expand-Pressed")
+		u.grip:SetShown(not on)
+		u.globe:SetActive(gps)
+	end
+end
+
+-- Puts a window where another one is, at the same size (for switching between 2D and 3D); in full
+-- screen, over the whole screen.
 function ns.CopyGeometry(to, from)
+	if ns.IsFullScreen() then
+		to:ClearAllPoints()
+		to:SetAllPoints(UIParent)
+		return
+	end
 	local point, rel, relPoint, x, y = from:GetPoint(1)
 	to:ClearAllPoints()
 	to:SetPoint(point or "CENTER", rel or UIParent, relPoint or "CENTER", x or 0, y or 0)
@@ -940,6 +1004,7 @@ frame:SetScript("OnShow", function()
 end)
 
 function ns.SaveFrame()
+	if ns.IsFullScreen() then return end -- (the place and size to go back to stay as they were)
 	local point, _, relPoint, x, y = frame:GetPoint(1)
 	ns.db.point = { point, relPoint, x, y }
 	ns.db.width, ns.db.height = frame:GetSize()
@@ -1050,15 +1115,43 @@ function ns.OpenNamed(name)
 end
 
 -- Puts the window back in the middle at its first size (/gps reset, and the button in the settings),
--- whichever mode is open.
+-- whichever mode is open; out of full screen.
 function ns.ResetWindow()
 	ns.Log("WINDOW", "reset to the middle at %dx%d", defaults.width, defaults.height)
+	ns.db.fullScreen = false
+	ns.UpdateChromes()
 	ns.db.point, ns.db.width, ns.db.height = defaults.point, defaults.width, defaults.height
 	frame:SetSize(ns.db.width, ns.db.height)
 	frame:ClearAllPoints()
 	frame:SetPoint("CENTER")
 	local name, m = ns.ShownMode()
 	if name and name ~= "2D" then ns.CopyGeometry(m.Frame(), frame) end
+end
+
+-- Full screen on or off for whichever window is open (and the 2D window, which holds the saved place
+-- and size): on, the place and size the window has now are saved and it fills the screen; off, it
+-- goes back to exactly them. Remembered (db.fullScreen), so every mode and a reload open the same way.
+function ns.SetFullScreen(on)
+	on = on and true or false
+	if not ns.db or ns.IsFullScreen() == on then return end
+	local _, m = ns.ShownMode()
+	local win = m and m.Frame()
+	if on then
+		if win and win ~= frame then ns.CopyGeometry(frame, win) end -- (not yet full screen: a plain copy)
+		ns.SaveFrame()
+		ns.db.fullScreen = true
+		frame:ClearAllPoints()
+		frame:SetAllPoints(UIParent)
+	else
+		ns.db.fullScreen = false
+		local p = ns.db.point
+		frame:ClearAllPoints()
+		frame:SetSize(ns.db.width, ns.db.height)
+		frame:SetPoint(p[1], UIParent, p[2], p[3], p[4])
+	end
+	if win and win ~= frame then ns.CopyGeometry(win, frame) end
+	ns.UpdateChromes()
+	ns.Log("WINDOW", "full screen %s (window %dx%d at %s %s %.0f, %.0f)", on and "on" or "off", ns.db.width, ns.db.height, tostring(ns.db.point[1]), tostring(ns.db.point[2]), ns.db.point[3], ns.db.point[4])
 end
 
 -- Keeps the place and size of another mode's window as the saved one (held by the 2D window).
@@ -1108,6 +1201,8 @@ events:SetScript("OnEvent", function(self, event, name)
 	frame:SetSize(db.width, db.height)
 	frame:ClearAllPoints()
 	frame:SetPoint(db.point[1], UIParent, db.point[2], db.point[3], db.point[4])
+	if db.fullScreen then frame:ClearAllPoints(); frame:SetAllPoints(UIParent) end
+	ns.UpdateChromes()
 	view.map = Maps[db.map] and db.map or (mapOrder[1] or 0)
 	view.follow = db.follow
 	view.scale = db.scale
@@ -1117,18 +1212,26 @@ events:SetScript("OnEvent", function(self, event, name)
 	view.scale = db.scale
 end)
 
--- The key binding and /gps: close whichever window is open, or open the one that fits (DefaultMode)
--- at the saved place and size.
+-- Opens the mode that fits (DefaultMode) at the saved place and size, looking at focus (see
+-- ns.OpenMode; nil: as last time).
+function ns.OpenDefault(focus)
+	local mode, auto = ns.DefaultMode()
+	ns.Log("MODE", "toggle: opening %s%s", mode, auto and " (GPS cannot show you here)" or "")
+	if not ns.OpenMode(mode, frame, focus) then
+		mode, auto = "2D", false
+		ns.OpenMode(mode, frame, focus)
+	end
+	ns.autoMap = auto or nil
+end
+
+-- The key binding and /gps (and the game's map key when it is set to open GPS, MapKey.lua): close
+-- whichever window is open, or open the one that fits; with the map key on GPS, Blizzard's map (open
+-- through the quest log key) closes as GPS opens.
 function GPS_Toggle()
 	local _, m = ns.ShownMode()
 	if m then m.Frame():Hide() return end
-	local mode, auto = ns.DefaultMode()
-	ns.Log("MODE", "toggle: opening %s%s", mode, auto and " (GPS cannot show you here)" or "")
-	if not ns.OpenMode(mode, frame, nil) then
-		mode, auto = "2D", false
-		ns.OpenMode(mode, frame, nil)
-	end
-	ns.autoMap = auto or nil
+	if ns.mapkey then ns.mapkey.CloseBlizzard() end
+	ns.OpenDefault(nil)
 end
 
 -- For the GPS3D window: the shared look, and switching back to 2D at the same place and size.
@@ -1204,6 +1307,7 @@ function ns.SelfTest()
 	Report("data: %d maps, %d tiles, overview %d px per tile (.%s), interface %s", nMaps, nTiles, OverviewPx, ns.OverviewExt or "jpg", tostring((select(4, GetBuildInfo()))))
 	Report("modes: %s; opening here picks %s%s", table.concat(ns.AvailableModes(), ", "), ns.modeNames[openMode] or openMode, auto and " (GPS cannot show you here)" or "")
 	if ns.MapSelfTest then ns.MapSelfTest(Report) end
+	if ns.mapkey then ns.mapkey.SelfTest(Report) end
 	-- the world map's layout (World.lua): from the game's C_Map, or the classic numbers where it gives none
 	if ns.WorldLayout then
 		local names, wi = {}, ns.WorldLayoutInfo
@@ -1316,6 +1420,10 @@ SlashCmdList.GPS = function(msg)
 		ns.OpenNamed(cmd == "map" and "Map" or cmd:upper())
 	elseif cmd == "reset" then
 		ns.ResetWindow()
+	elseif cmd == "fullscreen" then
+		ns.SetFullScreen(not ns.IsFullScreen())
+	elseif cmd == "mapkey" or cmd:match("^mapkey%s") then
+		if ns.mapkey then ns.mapkey.Command(cmd:match("^mapkey%s*(.-)$")) end
 	elseif cmd == "options" or cmd == "settings" or cmd == "config" then
 		ns.OpenSettings()
 	else

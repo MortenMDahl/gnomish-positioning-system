@@ -29,6 +29,10 @@ MUTANTS = [
     ('clouds not lit as the planet is', 'local light = LightAt(mx, my, alpha)', 'local light = 1', 'weather'),
     ('southern storms not mirrored', 'mirror = kind == 4 and lat < 0 }', 'mirror = false }', 'weather'),
     ('no lightning', '\tif now >= flash.next then', '\tif false then', 'weather'),
+    ('clouds and the storm one flat card each (as before 2026-10-21)', 'local function Pieces(s, s2) return max(1, math.ceil(s / PIECE)), max(1, math.ceil(s2 / PIECE)) end', 'local function Pieces(s, s2) return 1, 1 end', 'above'),
+    ('the pieces\' corners not lifted (their middles sag below the clouds\' height)', 'sh.hv = (rt + h) * sqrt(1 + (k / nA) ^ 2 + (k2 / nB) ^ 2) - rt', 'sh.hv = h', 'above'),
+    ('pieces facing away (behind the planet) drawn', 'draw = (x2 - x1) * (y4 - y1) - (x4 - x1) * (y2 - y1) > 0\n', 'draw = true\n', 'above'),
+    ('the sky\'s frame under the land\'s', 'Layer(1), Layer(2), Layer(3), Layer(4), Layer(5)', 'Layer(1), Layer(4), Layer(3), Layer(2), Layer(5)', 'above'),
 ]
 
 mutant = None
@@ -91,6 +95,22 @@ def at(d, m=None, x=None, y=None):
     if x is not None: cam.x, cam.y = x, y
     cam.dist = d
     ns.Render()
+
+
+# a planet texture's corners on screen (upper left, lower left, upper right, lower right), as Corners set them
+def corners(tex):
+    v = tex._vo
+    return [(v[1] - 0.5, v[2] + 0.5), (v[3] - 0.5, v[4] - 0.5), (v[5] + 0.5, v[6] + 0.5), (v[7] + 0.5, v[8] - 0.5)]
+def piece_centre(tex):
+    p = corners(tex); return (sum(q[0] for q in p) / 4, sum(q[1] for q in p) / 4)
+def shown_pieces(texs):
+    return [texs[j] for j in range(1, len(texs) + 1) if texs[j]._shown] if texs else []
+# a sheet's (a cloud's, the whirlpool's, its storm's) outer corners from its pieces: upper left, lower left, upper right, lower right
+def sheet_outline(sh):
+    nA, nB, t = sh.nA, sh.nB, sh.texs
+    return [corners(t[1])[0], corners(t[(nB - 1) * nA + 1])[1], corners(t[nA])[2], corners(t[nA * nB])[3]]
+def sheet_centre(sh):
+    p = sheet_outline(sh); return (sum(q[0] for q in p) / 4, sum(q[1] for q in p) / 4)
 
 # ------------------------------------------------------------------------------------------------
 def c_layout():
@@ -178,6 +198,8 @@ def c_identical():
         at(d)
         for _ in range(12):  # let building blocks still waiting to be made be made
             if ns.stats.detailPending == 0: break
+            ns.Render()
+        for _ in range(60):  # and the ground's level of detail settle (GPS3D.lua's Lod: a few tiles measured a frame, blended over 20)
             ns.Render()
         ns.Render()
         a = {}
@@ -282,22 +304,21 @@ def c_sky():
     at(70000, 0, *ns.GlobeFromPlane(0, X0, Y0))
     st = GS.stats
     clouds = ns.globeClouds
-    shown = [clouds[i] for i in range(1, len(clouds) + 1) if clouds[i].tex and clouds[i].tex._shown]
+    shown = [clouds[i] for i in range(1, len(clouds) + 1) if shown_pieces(clouds[i].texs)]
     facing = True
     for c in shown:
-        v = c.tex._vo  # corners: upper left, lower left, upper right, lower right
-        p = [(v[1] - 0.5, v[2] + 0.5), (v[3] - 0.5, v[4] - 0.5), (v[5] + 0.5, v[6] + 0.5), (v[7] + 0.5, v[8] - 0.5)]
-        if (p[1][0] - p[0][0]) * (p[3][1] - p[0][1]) - (p[3][0] - p[0][0]) * (p[1][1] - p[0][1]) <= 0: facing = False
+        for tex in shown_pieces(c.texs):
+            p = corners(tex)  # upper left, lower left, upper right, lower right
+            if (p[1][0] - p[0][0]) * (p[3][1] - p[0][1]) - (p[3][0] - p[0][0]) * (p[1][1] - p[0][1]) <= 0: facing = False
     check('clouds over the planet (facing the camera), the Maelstrom between the continents, the glow round the edge', len(shown) >= 8 and facing and st.mael and ns.globeTex.glow._shown, f'{len(shown)} clouds, Maelstrom {st.mael}, glow {ns.globeTex.glow._shown}')
     # the Maelstrom sits on the point between the continents
-    mv = ns.globeTex.mael._vo
-    mx = (mv[1] + mv[3] + mv[5] + mv[7]) / 4; my = (mv[2] + mv[4] + mv[6] + mv[8]) / 4
+    mx, my = sheet_centre(ns.globeSheets.mael)
     c0 = proj_plane(X0, Y0)
     MX = (lay[1].x1 + lay[0].x0) / 2  # the middle of the sea between Kalimdor's east coast box and the Eastern Kingdoms' west
     c0 = proj_plane(MX, Y0)
     check('the Maelstrom is drawn in the middle of the sea between the continents', c0 and abs(mx - c0[0]) < 2 and abs(my - c0[1]) < 2, f'{mx:.1f},{my:.1f} vs {c0}')
     at(HANDOVER * 1.05, 0, 32 * TILE, -45 * TILE)
-    nshow = sum(1 for i in range(1, len(clouds) + 1) if clouds[i].tex and clouds[i].tex._shown)
+    nshow = sum(1 for i in range(1, len(clouds) + 1) if shown_pieces(clouds[i].texs))
     check('near the hand-over: no clouds, Maelstrom or glow yet, the sea the minimap\'s colour', nshow == 0 and not GS.stats.mael and not ns.globeTex.glow._shown and GS.stats.k == 0, f'{nshow} clouds, blue {GS.stats.k}')
 
 def c_weather():
@@ -308,20 +329,27 @@ def c_weather():
     clouds = ns.globeClouds
     cl = [clouds[i] for i in range(1, len(clouds) + 1)]
     kinds = sorted(set(c.kind for c in cl))
-    shown = [c for c in cl if c.tex and c.tex._shown]
+    shown = [c for c in cl if shown_pieces(c.texs)]
     worst_sh, ok_sh = 0, True
     for c in shown:
-        v, w = c.tex._vo, c.sh._vo
-        dx, dy = w[1] - v[1], w[2] - v[2]
-        if not (c.sh._shown and dx > 0.3 and dy < -0.3 and all(abs((w[i] - v[i]) - (dx if i % 2 else dy)) < 1e-6 for i in range(1, 9))): ok_sh = False
-        if c.sh._color[4] > 0.3 * c.tex._color[4] + 1e-9: ok_sh = False
+        offs = set()
+        for j in range(1, len(c.texs) + 1):
+            tex, sh = c.texs[j], c.shs[j]
+            if tex._shown != sh._shown: ok_sh = False
+            if not tex._shown: continue
+            v, w = tex._vo, sh._vo
+            dx, dy = w[1] - v[1], w[2] - v[2]
+            offs.add((round(dx, 6), round(dy, 6)))
+            if not (dx > 0.3 and dy < -0.3 and all(abs((w[i] - v[i]) - (dx if i % 2 else dy)) < 1e-6 for i in range(1, 9))): ok_sh = False
+            if sh._color[4] > 0.3 * tex._color[4] + 1e-9: ok_sh = False
+        if len(offs) != 1: ok_sh = False  # one offset for the whole cloud
     check('clouds of all six kinds on the planet, each drawn with its shadow below it toward the lower right (faint)', kinds == [1, 2, 3, 4, 5, 6] and len(cl) >= 60 and len(shown) >= 10 and ok_sh,
           f'{len(cl)} clouds of kinds {kinds}, {len(shown)} shown, shadows {"ok" if ok_sh else "wrong"}')
     # lit as the planet: brighter toward the light (upper left), darker away from it
     pts = []
     for c in shown:
-        v = c.tex._vo
-        pts.append(((v[1] + v[7]) / 2, (v[2] + v[8]) / 2, c.tex._color[1]))
+        tex = shown_pieces(c.texs)[0]
+        pts.append((*piece_centre(tex), tex._color[1]))
     hi = max(pts, key=lambda p: p[2]); lo = min(pts, key=lambda p: p[2])
     lx, ly = -0.45, 0.55
     check('clouds lit as the planet is: brighter toward the light (upper left), darker on the far side of it', lo[2] < 0.9 and hi[2] > lo[2] + 0.1 and (hi[0] - lo[0]) * lx + (hi[1] - lo[1]) * ly > 0,
@@ -334,24 +362,181 @@ def c_weather():
         good += (c.mirror is True) == (not lat_n)
     check('storms turn the way their hemisphere\'s storms turn: the southern ones mirrored', len(storms) >= 3 and good == len(storms) and any(c.mirror for c in storms) and not all(c.mirror for c in storms), f'{good} of {len(storms)} storms')
     # the Maelstrom: the storm over the whirlpool, 1.45 x its size, both centred on it
-    T = ns.globeTex
-    mv, sv = T.mael._vo, T.storm._vo
-    def size(v): return math.hypot(v[5] - v[1], v[6] - v[2])
-    def centre(v): return ((v[1] + v[3] + v[5] + v[7]) / 4, (v[2] + v[4] + v[6] + v[8]) / 4)
-    mc, sc = centre(mv), centre(sv)
-    check('the Maelstrom: its storm over the whirlpool (1.45 x its size, on it), both shown', T.mael._shown and T.storm._shown and abs(size(sv) / size(mv) - 1.45) < 0.05 and math.hypot(mc[0] - sc[0], mc[1] - sc[1]) < 3,
-          f'size ratio {size(sv) / size(mv):.3f}, centres {math.hypot(mc[0] - sc[0], mc[1] - sc[1]):.2f} px apart')
+    SH = ns.globeSheets
+    def size(sh): p = sheet_outline(sh); return math.hypot(p[2][0] - p[0][0], p[2][1] - p[0][1])
+    mc, sc = sheet_centre(SH.mael), sheet_centre(SH.storm)
+    both = len(shown_pieces(SH.mael.texs)) == len(SH.mael.texs) and len(shown_pieces(SH.storm.texs)) == len(SH.storm.texs)
+    # (the storm is higher, 1,050 yd, so a little larger on screen: 1.45 x within 5 %)
+    check('the Maelstrom: its storm over the whirlpool (1.45 x its size, on it), both shown', both and abs(size(SH.storm) / size(SH.mael) - 1.45) < 0.05 * 1.45 and math.hypot(mc[0] - sc[0], mc[1] - sc[1]) < 3,
+          f'size ratio {size(SH.storm) / size(SH.mael):.3f}, centres {math.hypot(mc[0] - sc[0], mc[1] - sc[1]):.2f} px apart')
     # lightning: over 12 seconds, flashes now and then (not all the time), each in the storm
     a0 = []
     frames, lit, inside = 0, 0, True
-    r_storm = size(sv) / 2
+    r_storm = size(SH.storm) / 2
+    bolt = SH.bolt.texs[1]
     for _ in range(360):
         tick(1); frames += 1
-        if T.bolt._shown and T.bolt._color[4] > 0.01:
+        if bolt._shown and bolt._color[4] > 0.01:
             lit += 1
-            bc = centre(T.bolt._vo)
+            bc = sheet_centre(SH.bolt)
             if math.hypot(bc[0] - mc[0], bc[1] - mc[1]) > r_storm: inside = False
     check('lightning flashes in the Maelstrom\'s storm now and then (over 12 s: some frames, not most), always within the storm', 3 <= lit <= 0.25 * frames and inside, f'{lit} of {frames} frames lit')
+
+def c_above():
+    # The clouds and the Maelstrom's storm over the land and the sea (2026-10-21; Morten, from far out: "the cloud
+    # on the bottom left of the maelstrom looks like it is inside the planet underneath the continent", "the case
+    # for many of the clouds"). At views like his (the whole planet, the Maelstrom in the middle, the continents
+    # toward the edges), turned, over the far side and while the planet spins:
+    # (1) the draw order as the engine draws (strata, frame level, then draw layer, sublevel, order): every
+    #     cloud piece, its shadow and the storm after every land triangle and the sea's textures;
+    # (2) where they are drawn: every point of their images (sampled across each piece as the game maps a texture
+    #     onto its two triangles, without perspective) against its vertical (between those of its triangle's
+    #     corners, each where the image's corner lies on the sphere): on screen, from the sea under it toward
+    #     CLOUD_H above (the storm 1.5 x), where that way is 3 px or more, it must be at least half way up and at
+    #     most 3 x; none drawn where it is hidden behind the planet, none more than 6 px off its vertical.
+    # Until 2026-10-21 (one flat card per cloud) the order was right, but about half of the clouds' points were
+    # drawn below the sea, down to 4,000-5,000 yd under it (the cards' middles inside the planet).
+    ns.SetCamMode('free')
+    Gs = ns.GlobeFrameState
+    X0, Y0, MX, MY = ns.GlobeCentres()
+    H = 700
+    order = L.eval('''function()
+        local k = 0
+        for _, f in ipairs(SANDBOX.visibleFrames()) do
+            local regs = {}
+            for _, r in ipairs(f._regions or {}) do regs[#regs + 1] = r end
+            table.sort(regs, function(a, b)
+                local ka, kb = a._layer * 16 + a._sub, b._layer * 16 + b._sub
+                if ka ~= kb then return ka < kb end
+                return a._order < b._order
+            end)
+            for _, r in ipairs(regs) do r._drawIdx = nil; if r._shown then k = k + 1; r._drawIdx = k end end
+        end
+    end''')
+    def unit(X, Y, rt):
+        qx, qy = (X - X0) / (2 * rt), (Y - Y0) / (2 * rt)
+        q = qx * qx + qy * qy; k = 1 / (1 + q)
+        return (2 * qx * k, 2 * qy * k, (1 - q) * k)
+    def project(u, h):  # screen point and world point of a unit vector at height h (Globe.lua's WorldOfUnit, Project)
+        vx, vy, vz = u; r = Gs.rt + h
+        x = cam.x + (vx * Gs.ex + vy * Gs.ey + vz * Gs.ez) * r / Gs.ax
+        y = cam.y + (vx * Gs.nx + vy * Gs.ny + vz * Gs.nz) * r / Gs.ay
+        z = (vx * Gs.ox + vy * Gs.oy + vz * Gs.oz) * r - Gs.rt
+        dx, dy, dz = x - Gs.cx, y - Gs.cy, z - Gs.cz
+        d = dx * Gs.fx + dy * Gs.fy + dz * Gs.fz
+        if d <= 1: return None
+        sc = Gs.F / d
+        return ((dx * Gs.rx + dy * Gs.ry) * sc, (dx * Gs.ux + dy * Gs.uy + dz * Gs.uz) * sc, (x, y, z))
+    def behind(w):  # the line from the camera to the world point w meets the sphere first
+        dx, dy, dz = w[0] - Gs.cx, w[1] - Gs.cy, w[2] - Gs.cz
+        fx, fy, fz = Gs.cx - cam.x, Gs.cy - cam.y, Gs.cz + Gs.rt
+        a = dx * dx + dy * dy + dz * dz; b = 2 * (fx * dx + fy * dy + fz * dz); c = fx * fx + fy * fy + fz * fz - Gs.rt * Gs.rt
+        disc = b * b - 4 * a * c
+        return disc > 0 and 0 < (-b - math.sqrt(disc)) / (2 * a) < 0.999
+    def image_point(X, Y, s, s2, rot, mirror, tu, tv):  # the image's point (tu, tv) on the sphere, as Globe.lua lays it
+        v = unit(X, Y, Gs.rt)
+        ax, az = v[2], -v[0]; l = math.hypot(ax, az) or 1; ax, az = ax / l, az / l
+        bx, by, bz = v[1] * az, v[2] * ax - v[0] * az, -v[1] * ax
+        c, sn = math.cos(rot), math.sin(rot)
+        t1 = (ax * c + bx * sn, by * sn, az * c + bz * sn)
+        t2 = (-ax * sn + bx * c, by * c, -az * sn + bz * c)
+        a = ((1 - 2 * tu) if mirror else (2 * tu - 1)) * s / Gs.rt
+        b = (1 - 2 * tv) * s2 / Gs.rt
+        p = [v[i] + t1[i] * a + t2[i] * b for i in range(3)]
+        l = math.sqrt(sum(q * q for q in p))
+        return (p[0] / l, p[1] / l, p[2] / l)
+    def measure(texs, X, Y, s, s2, rot, mirror, h, st):
+        for tex in texs:
+            P = corners(tex)
+            tc = tex._tc
+            T = [(tc[1], tc[2]), (tc[3], tc[4]), (tc[5], tc[6]), (tc[7], tc[8])] if tc else [(0, 0), (0, 1), (1, 0), (1, 1)]
+            Uc = [image_point(X, Y, s, s2, rot, mirror, *T[q]) for q in range(4)]  # the corners' places on the sphere
+            for tri in ((0, 1, 2), (2, 1, 3)):  # the two triangles a texture is drawn as
+                n = 5
+                for i in range(n + 1):
+                    for j in range(n + 1 - i):
+                        a, b = i / n, j / n; c = 1 - a - b
+                        D = [a * P[tri[0]][q] + b * P[tri[1]][q] + c * P[tri[2]][q] for q in range(2)]
+                        U = [a * T[tri[0]][q] + b * T[tri[1]][q] + c * T[tri[2]][q] for q in range(2)]
+                        # the point's vertical: between its triangle's corners' (so how the image stretches
+                        # between a piece's corners does not count as height)
+                        u = [a * Uc[tri[0]][q] + b * Uc[tri[1]][q] + c * Uc[tri[2]][q] for q in range(3)]
+                        lu = math.sqrt(sum(q * q for q in u)); u = (u[0] / lu, u[1] / lu, u[2] / lu)
+                        ph, p0 = project(u, h), project(u, 0)
+                        if not ph or not p0: continue
+                        st['n'] += 1
+                        if behind(ph[2]): st['behind'] += 1; continue
+                        vx, vy = ph[0] - p0[0], ph[1] - p0[1]
+                        par = math.hypot(vx, vy)
+                        if par < 1e-9: continue
+                        side = abs((D[0] - ph[0]) * vy - (D[1] - ph[1]) * vx) / par
+                        st['side'] = max(st['side'], side)
+                        if par >= 3:
+                            up = ((D[0] - p0[0]) * vx + (D[1] - p0[1]) * vy) / (par * par)  # drawn height over h
+                            st['m'] += 1
+                            st['lo'] = min(st['lo'], up * h); st['hi'] = max(st['hi'], up * h)
+                            if up < 0: st['below'] += 1
+                            if up < 0.5 or up > 3: st['bad'] += 1
+    def storm_turn(tex, X, Y, s, h):  # (the code before sheets kept no storm turn: the one that puts its corner where drawn)
+        P = corners(tex)[0]
+        best = (1e9, 0)
+        for k in range(1440):
+            r = k * math.pi / 720
+            q = project(image_point(X, Y, s, s, r, False, 0, 0), h)
+            if q: best = min(best, (math.hypot(q[0] - P[0], q[1] - P[1]), r))
+        return best[1]
+    views = [('the whole planet, the Maelstrom in the middle, 90,000 yd (as reported)', 90000, MX, MY, 0),
+             ('the same from 110,000 yd', 110000, MX, MY, 0), ('the same from 62,000 yd', 62000, MX, MY, 0),
+             ('turned 40 degrees', 65000, MX, MY, 40), ('a continent at the edge', 80000, MX - 25000, MY, 0),
+             ('over the far side, turned round', 70000, MX + 30000, MY, 170)]
+    lines, fails = [], 0
+    for name, d, X, Y, yaw in views:
+        cam.map = 0; cam.x, cam.y = ns.GlobeFromPlane(0, X, Y); cam.dist = d; cam.yaw = yaw; ns.Render()
+        fails += above_one(name, lines, order, measure, storm_turn, H)
+    # spinning: drags across the planet (each turning it about 40 degrees), looked at every 4th frame
+    at(70000, 0, *ns.GlobeFromPlane(0, MX, MY)); cam.yaw = 0; ns.Render()
+    for k in range(4):
+        mouse('move', 100, 0); mouse('down', 100, 0, 'LeftButton'); tick(1)
+        for i in range(1, 13):
+            mouse('move', 100 - 17 * i, 0); tick(1)
+            if i % 4 == 0: fails += above_one(f'spinning the planet: drag {k + 1}, frame {i}', lines, order, measure, storm_turn, H)
+        mouse('up', 100 - 17 * 12, 0, 'LeftButton'); tick(1)
+    for l in lines: print('     ', l)
+    check('clouds and the Maelstrom\'s storm over the land and the sea at every view (the planet whole, turned, a continent at the edge, the far side, spinning): drawn after every land triangle and the sea, and every point of them between half and 3 x its height above the sea, none hidden behind the planet, at most 6 px off its vertical',
+          fails == 0, f'{len(lines)} views, {fails} wrong')
+
+def above_one(name, lines, order, measure, storm_turn, H):
+    X0, Y0, MX, MY = ns.GlobeCentres()
+    order()
+    land = []
+    for k, lv in ns.GlobeLevels().items():
+        if lv.active:
+            for tt in lv.tris.values():
+                if tt.shown: land.append(tt.tex)
+    T, SH = ns.globeTex, ns.globeSheets
+    # (the Maelstrom and the clouds as sheets of pieces; before 2026-10-21 one texture each: c.tex, c.sh,
+    # T.mael, T.storm, so that this check can be run on that code too)
+    mael = shown_pieces(SH.mael.texs) if SH else [T.mael]
+    storm = shown_pieces(SH.storm.texs) if SH else [x for x in [T.storm] if x._shown]
+    ground = [x for x in land + [T.bg, T.disc, T.shade] + mael if x._shown]
+    clouds = ns.globeClouds
+    sky = list(storm)
+    st = {'n': 0, 'm': 0, 'behind': 0, 'side': 0, 'lo': 1e9, 'hi': -1e9, 'below': 0, 'bad': 0}
+    for i in range(1, len(clouds) + 1):
+        c = clouds[i]
+        texs = shown_pieces(c.texs) if c.texs else [x for x in [c.tex] if x and x._shown]
+        sky += texs + (shown_pieces(c.shs) if c.shs else [x for x in [c.sh] if x and x._shown])
+        if texs: measure(texs, c.X, c.Y, c.size, c.size2, c.rot, bool(c.mirror), H, st)
+    if storm:
+        if SH: rot, s = SH.storm.rot, SH.storm.s
+        else: s = 1.45 * 5000; rot = storm_turn(storm[0], MX, MY, s, 1.5 * H)
+        measure(storm, MX, MY, s, s, rot, False, 1.5 * H, st)
+    top = max(x._drawIdx for x in ground)
+    low = min(x._drawIdx for x in sky) if sky else 10 ** 9
+    ok = low > top and st['behind'] == 0 and st['bad'] == 0 and st['side'] <= 6 and st['n'] > 500
+    lines.append(f'{"ok " if ok else "BAD"} {name}: {len(sky)} cloud, shadow and storm pieces drawn {"after" if low > top else "NOT after"} {len(ground)} land and sea textures; '
+                 f'{st["n"]} image points, {st["behind"]} hidden behind the planet, height {st["lo"]:.0f} to {st["hi"]:.0f} yd ({st["below"]} below the sea, {st["bad"]} of {st["m"]} outside half to 3 x), {st["side"]:.1f} px off its vertical at most')
+    return 0 if ok else 1
 
 def c_arrow():
     ns.FollowMe('follow'); tick(30)
@@ -677,7 +862,7 @@ def c_speed():
     check('no garbage kept: memory flat over 300 planet frames', m1 - m0 < 64, f'{m1 - m0:+.1f} KB')
 
 CHECKS = {'layout': c_layout, 'maths': c_maths, 'straighten': c_straighten, 'identical': c_identical, 'firstentry': c_firstentry, 'handover': c_handover,
-          'planet': c_planet, 'sky': c_sky, 'weather': c_weather, 'arrow': c_arrow, 'pick': c_pick, 'controls': c_controls, 'spin': c_spin,
+          'planet': c_planet, 'sky': c_sky, 'weather': c_weather, 'above': c_above, 'arrow': c_arrow, 'pick': c_pick, 'controls': c_controls, 'spin': c_spin,
           'flydown': c_flydown, 'me': c_me, 'cycle': c_cycle, 'pull': c_pull, 'instances': c_instances, 'follow': c_follow,
           'farspin': c_farspin, 'farfly': c_farfly, 'pole': c_pole, 'selftest': c_selftest, 'speed': c_speed}
 

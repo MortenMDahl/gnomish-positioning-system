@@ -85,7 +85,7 @@ cats = g.page()
 check('one AddOns category, named after the addon', len(cats) == 1 and cats[0]['name'] == 'Gnomish Positioning System', str([c['name'] for c in cats]))
 controls = cats[0]['controls']
 layout = [(c['kind'], c['name']) for c in controls]
-want = [('header', 'Map window'), ('choice', 'Opens as'), ('check', "Traditional map where GPS can't show you"), ('button', 'Window'),
+want = [('header', 'Map window'), ('choice', 'Opens as'), ('check', "Traditional map where GPS can't show you"), ('choice', 'Map key opens'), ('button', 'Window'),
         ('header', 'Quests'), ('check', 'Your quests on the 2D map and in the 3D view'),
         ('header', 'Other addons'), ('check', "Other addons' map markers"),
         ('header', '3D view'), ('choice', 'You are shown as'), ('choice', 'Camera on you'), ('check', 'Look straight down'), ('check', 'Buildings'),
@@ -104,6 +104,7 @@ mval = lambda k: (lambda v: True if v == 'true' else False if v == 'false' else 
 fresh = {
     'GPS_OpenAs': re.search(r'local defaults = \{.*mode = "(\w+)"', core).group(1),
     'GPS_AutoTraditional': 'autoTraditional = true' in re.search(r'local defaults = \{.*\}', core).group(0),
+    'GPS_MapKey': re.search(r'local defaults = \{.*mapKey = "(\w+)"', core).group(1),
     'GPS3D_Marker': re.search(r'local markerMode = "(\w+)"', src3).group(1),
     'GPS3D_Camera': re.search(r'GPS3D_DB\.camMode or "(\w+)"\)', src3).group(1),
     'GPS3D_TopDown': 'if GPS3D_DB.topDown ~= false then SetTopDown(true, true)' in src3,

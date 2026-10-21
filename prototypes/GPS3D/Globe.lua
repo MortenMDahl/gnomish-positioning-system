@@ -16,10 +16,11 @@
 -- looked at stays where it is and its east and north stay east and north.
 --
 -- Drawing: the sea is one disc texture (tinted; the shading over it is a second one), the land is one
--- textured triangle per half of a block of tiles (as the ground is), clouds and the Maelstrom are quads on
--- the sphere. Close to the hand-over the land shows GPS's overview images (as the ground did); once a tile is
--- small on screen, the planet's own pages (Globe\Land_*.tga, the open sea transparent), and then the sea
--- turns from the minimap's dark water to blue, the shading, the glow, the clouds and the Maelstrom fade in.
+-- textured triangle per half of a block of tiles (as the ground is), clouds and the Maelstrom are images
+-- laid on the sphere in pieces (sheets). Close to the hand-over the land shows GPS's overview images (as the
+-- ground did); once a tile is small on screen, the planet's own pages (Globe\Land_*.tga, the open sea
+-- transparent), and then the sea turns from the minimap's dark water to blue, the shading, the glow, the
+-- clouds and the Maelstrom fade in.
 local addonName, ns = ...
 local GPS = GPS_API
 local cam, canvas, TILE = ns.cam, ns.canvas, ns.TILE
@@ -270,27 +271,13 @@ local disc = oceanFrame:CreateTexture(nil, "BORDER")
 disc:SetTexture(MEDIA .. "Disc")
 local shade = oceanFrame:CreateTexture(nil, "ARTWORK")
 shade:SetTexture(MEDIA .. "Shade")
-local mael = oceanFrame:CreateTexture(nil, "OVERLAY")
-mael:SetTexture(MEDIA .. "Maelstrom")
-mael:SetSize(1, 1)
-mael:SetPoint("CENTER", canvas, "CENTER", 0, 0)
-local storm = skyFrame:CreateTexture(nil, "OVERLAY", nil, 1) -- the storm over the Maelstrom (over the clouds)
-storm:SetTexture(MEDIA .. "MaelstromStorm")
-storm:SetSize(1, 1)
-storm:SetPoint("CENTER", canvas, "CENTER", 0, 0)
-local bolt = skyFrame:CreateTexture(nil, "OVERLAY", nil, 2) -- a lightning flash in it
-bolt:SetTexture(MEDIA .. "MaelstromBolt")
-bolt:SetBlendMode("ADD")
-bolt:SetSize(1, 1)
-bolt:SetPoint("CENTER", canvas, "CENTER", 0, 0)
-bolt:Hide()
 local glow = skyFrame:CreateTexture(nil, "OVERLAY", nil, 7)
 glow:SetTexture(MEDIA .. "Glow")
 local arrow = markFrame:CreateTexture(nil, "OVERLAY")
 arrow:SetTexture("Interface\\Minimap\\MinimapArrow")
 arrow:SetSize(1, 1)
 arrow:SetPoint("CENTER", canvas, "CENTER", 0, 0)
-ns.globeTex = { bg = bg, disc = disc, shade = shade, mael = mael, storm = storm, bolt = bolt, glow = glow, arrow = arrow }
+ns.globeTex = { bg = bg, disc = disc, shade = shade, glow = glow, arrow = arrow } -- (the Maelstrom: ns.globeSheets)
 
 -- Puts a texture (whose image is a disc or ring centred in it) over a square of half size r centred at
 -- (x, y) on the canvas, cut to the canvas so it never grows past it; hidden when off the canvas.
@@ -309,14 +296,14 @@ local function PlaceSquare(tex, x, y, r)
 end
 
 -- Triangle and quad textures: pools per frame
-local function Pool(frame, layer)
+local function Pool(frame, layer, sub)
 	local free, n = {}, 0
 	local p = {}
 	function p.Get()
 		local tex
 		if n > 0 then tex = free[n]; free[n] = nil; n = n - 1
 		else
-			tex = frame:CreateTexture(nil, layer)
+			tex = frame:CreateTexture(nil, layer, nil, sub)
 			tex:SetSize(1, 1)
 			tex:SetPoint("CENTER", canvas, "CENTER", 0, 0)
 			p.made = (p.made or 0) + 1
@@ -592,14 +579,16 @@ local function SortVisible()
 end
 
 ------------------------------------------------------------------------------------------------
--- Clouds and the Maelstrom: quads on the sphere
+-- Clouds and the Maelstrom: images laid on the sphere in pieces (sheets)
 ------------------------------------------------------------------------------------------------
 local clouds = {}
 ns.globeClouds = clouds -- (for the tests)
 -- The clouds, placed once (the same every time: a fixed seed), as weather on a planet places them: storms
 -- (spirals, turning the way their hemisphere's storms turn) in the middle latitudes, each with a front
 -- trailing toward the equator; fields of cumulus (clusters and cloud streets) along the equator and in the
--- storm belts; veils of cirrus. Over land fewer and fainter; none on the Maelstrom (its own storm is there).
+-- storm belts; veils of cirrus. Over land fewer (as bright as elsewhere since 2026-10-21: at 0.7 of it a
+-- cloud over land let the land show through and read as lying under it); none on the Maelstrom (its own
+-- storm is there).
 -- Latitude and longitude are the planet's (its north the sphere's +y, longitude 0 the point between the
 -- continents).
 local function MakeClouds()
@@ -620,7 +609,7 @@ local function MakeClouds()
 		local dmx, dmy = X - MX, Y - MY
 		if dmx * dmx + dmy * dmy < (0.8 * STORM_SIZE + 0.5 * size) ^ 2 then return end
 		clouds[#clouds + 1] = { X = X, Y = Y, size = size, size2 = size * aspect, rot = rot, kind = kind, file = MEDIA .. "Cloud" .. kind,
-			alpha = alpha * (over and 0.7 or 1), mirror = kind == 4 and lat < 0 }
+			alpha = alpha, over = over, mirror = kind == 4 and lat < 0 }
 	end
 	for i = 1, 5 do
 		local hemi = i % 2 == 0 and -1 or 1
@@ -642,68 +631,183 @@ local function MakeClouds()
 	end
 end
 
--- the four corners of a rectangle of half sizes s (along its x) and s2 (along its y; s if not given), in
--- yards on the sphere, its x turned by rot from the planet's east toward its north, centred on a plane
--- point, at height h: screen positions in the order upper left, lower left, upper right, lower right of the
--- texture, or nil when it faces away or is off screen
+-- Sheets: a cloud, the Maelstrom's whirlpool, its storm and a lightning flash are each an image laid on the
+-- sphere at a height: a rectangle of half sizes s (along its x, the planet's east turned by rot toward its
+-- north) and s2 (along its y) round a plane point, its point (a, b) being v + a t1 + b t2 pushed out onto the
+-- sphere (v the middle, t1 and t2 the turned east and north there, a and b up to s and s2 over the radius).
+-- Until 2026-10-21 each was one flat card through its four corners. A card is a chord, so its middle lay inside
+-- the planet (a storm 10,000 yd across 2,200 yd below its corners, a front's long band 4,000 to 6,700 yd), and
+-- the game maps a texture onto a card's two triangles without perspective. Seen from far out as Morten saw it
+-- (the Maelstrom in the middle, 90,000 yd), 44 % of the points of the clouds' and the storm's images were drawn
+-- where points under the sea would be (down to 4,100 yd under it), and some where the planet hides them: next
+-- to the land a cloud seemed to lie under it (and moved as if it did when the planet turned), toward the edge
+-- smeared. The draw order was right (the sky's frame over the land's). Now a sheet is a grid of pieces (at
+-- most PIECE yards half size on the round planet) whose corners are lifted so that the middle of each piece
+-- is at the sheet's height: every point of every cloud is drawn between 0.7 and 2.1 times its height above
+-- the sea (test_globe's check "clouds and the Maelstrom's storm over the land and the sea"). Pieces facing away
+-- (past the planet's edge) are left out one by one; before, a cloud faded out whole toward the edge, which made
+-- the clouds there faint as if under the surface. Cost: the same frame time (each sheet's grid is kept until
+-- the sphere's radius changes, sheets wholly past the edge are skipped first, colours set only when changed;
+-- in the sandbox 0.38 ms a planet frame at 90,000 yd before and after), but about 4 x the textures placed
+-- (276 pieces and their shadows against 73 cards at that view).
+local PIECE = 4000
 local qx_, qy_ = {}, {}
-local SIGNS = { { -1, 1 }, { -1, -1 }, { 1, 1 }, { 1, -1 } } -- (along t1, along t2): upper left, lower left, upper right, lower right
-local function QuadOnSphere(X, Y, s, rot, h, s2)
-	local vx, vy, vz
-	s2 = s2 or s
-	if G.flat then
-		-- flat: a rectangle in the plane (t1 east and t2 north, turned by rot)
-		local c, sn = cos(rot), sin(rot)
-		for i = 1, 4 do
-			local a, b = SIGNS[i][1] * s, SIGNS[i][2] * s2
-			local sx, sy = Project(WorldOf(X + a * c - b * sn, Y + a * sn + b * c, h))
-			if not sx then return nil end
-			qx_[i], qy_[i] = sx, sy
-		end
-	else
-		vx, vy, vz = Unit(X, Y, G.rt)
-		-- the planet's east and north there (east = its axis x the point), turned by rot
-		local ax_, ay_, az_ = vz, 0, -vx
-		local l = sqrt(ax_ * ax_ + az_ * az_)
-		if l < 1e-9 then ax_, ay_, az_, l = 1, 0, 0, 1 end
-		ax_, ay_, az_ = ax_ / l, ay_ / l, az_ / l
-		local bx_, by_, bz_ = vy * az_ - vz * ay_, vz * ax_ - vx * az_, vx * ay_ - vy * ax_
-		local c, sn = cos(rot), sin(rot)
-		local t1x, t1y, t1z = ax_ * c + bx_ * sn, ay_ * c + by_ * sn, az_ * c + bz_ * sn
-		local t2x, t2y, t2z = -ax_ * sn + bx_ * c, -ay_ * sn + by_ * c, -az_ * sn + bz_ * c
-		local k, k2 = s / G.rt, s2 / G.rt
-		for i = 1, 4 do
-			local a, b = SIGNS[i][1] * k, SIGNS[i][2] * k2
-			local px, py, pz = vx + t1x * a + t2x * b, vy + t1y * a + t2y * b, vz + t1z * a + t2z * b
-			local l2 = sqrt(px * px + py * py + pz * pz)
-			local wx, wy, wz = WorldOfUnit(px / l2, py / l2, pz / l2, h)
-			local sx, sy = Project(wx, wy, wz)
-			if not sx then return nil end
-			qx_[i], qy_[i] = sx, sy
+-- a sheet of nA x nB pieces, textures from pool (and a shadow piece for each from shadowPool), the image
+-- mirrored left to right if asked
+local function NewSheet(nA, nB, mirror, file, pool, shadowPool)
+	local sh = { nA = nA, nB = nB, nv = (nA + 1) * (nB + 1), texs = {}, on = {}, ux = {}, uy = {}, uz = {}, px = {}, py = {}, ok = {} }
+	if shadowPool then sh.shs = {} end
+	for j = 0, nB - 1 do
+		for i = 0, nA - 1 do
+			local l, r = i / nA, (i + 1) / nA
+			if mirror then l, r = 1 - l, 1 - r end
+			local tex = pool.Get()
+			tex:SetTexture(file)
+			tex:SetTexCoord(l, r, j / nB, (j + 1) / nB)
+			sh.texs[#sh.texs + 1] = tex
+			sh.on[#sh.texs] = false
+			if shadowPool then
+				local s = shadowPool.Get()
+				s:SetTexture(file)
+				s:SetTexCoord(l, r, j / nB, (j + 1) / nB)
+				sh.shs[#sh.texs] = s
+			end
 		end
 	end
-	-- facing: upper left, lower left, lower right counter-clockwise on screen (y up)
-	local area = (qx_[2] - qx_[1]) * (qy_[4] - qy_[1]) - (qx_[4] - qx_[1]) * (qy_[2] - qy_[1])
-	if not (area > 0) then return nil end
-	local w, hh = canvas:GetSize()
-	w, hh = w / 2, hh / 2
-	local x0, x1, y0, y1 = math.huge, -math.huge, math.huge, -math.huge
-	for i = 1, 4 do x0, x1, y0, y1 = min(x0, qx_[i]), max(x1, qx_[i]), min(y0, qy_[i]), max(y1, qy_[i]) end
-	if x1 < -w or x0 > w or y1 < -hh or y0 > hh then return nil end
-	return true, vx, vy, vz
+	return sh
 end
-
-local function FacingCamera(vx, vy, vz)
-	-- how much a point of the sphere faces the camera (1 straight at it, 0 at the planet's edge)
-	if not vx then return 1 end
-	local wx, wy, wz = WorldOfUnit(vx, vy, vz, 0)
-	local nxw = ((vx * G.ex + vy * G.ey + vz * G.ez) / G.ax)
-	local nyw = ((vx * G.nx + vy * G.ny + vz * G.nz) / G.ay)
-	local nzw = (vx * G.ox + vy * G.oy + vz * G.oz)
-	local tx, ty, tz = G.cx - wx, G.cy - wy, G.cz - wz
-	local l = sqrt(tx * tx + ty * ty + tz * tz)
-	return (nxw * tx + nyw * ty + nzw * tz) / l
+-- the sheet's grid on the sphere (unit vectors) and its corners' height; worked out again only when the
+-- sphere's radius or the sheet's place, size, turn or height changed
+local function SheetPlace(sh, X, Y, s, s2, rot, h)
+	local rt = G.rt
+	if sh.rt == rt and sh.X == X and sh.Y == Y and sh.s == s and sh.s2 == s2 and sh.rot == rot and sh.h == h then return end
+	sh.rt, sh.X, sh.Y, sh.s, sh.s2, sh.rot, sh.h = rt, X, Y, s, s2, rot, h
+	local vx, vy, vz = Unit(X, Y, rt)
+	-- the planet's east and north there (east = its axis x the point), turned by rot
+	local ax_, ay_, az_ = vz, 0, -vx
+	local l = sqrt(ax_ * ax_ + az_ * az_)
+	if l < 1e-9 then ax_, ay_, az_, l = 1, 0, 0, 1 end
+	ax_, ay_, az_ = ax_ / l, ay_ / l, az_ / l
+	local bx_, by_, bz_ = vy * az_ - vz * ay_, vz * ax_ - vx * az_, vx * ay_ - vy * ax_
+	local c, sn = cos(rot), sin(rot)
+	local t1x, t1y, t1z = ax_ * c + bx_ * sn, ay_ * c + by_ * sn, az_ * c + bz_ * sn
+	local t2x, t2y, t2z = -ax_ * sn + bx_ * c, -ay_ * sn + by_ * c, -az_ * sn + bz_ * c
+	local nA, nB = sh.nA, sh.nB
+	local k, k2 = s / rt, s2 / rt
+	local ux, uy, uz = sh.ux, sh.uy, sh.uz
+	for j = 0, nB do
+		local b = (1 - 2 * j / nB) * k2
+		for i = 0, nA do
+			local a = (2 * i / nA - 1) * k
+			local px, py, pz = vx + t1x * a + t2x * b, vy + t1y * a + t2y * b, vz + t1z * a + t2z * b
+			local l2 = sqrt(px * px + py * py + pz * pz)
+			local vi = j * (nA + 1) + i + 1
+			ux[vi], uy[vi], uz[vi] = px / l2, py / l2, pz / l2
+		end
+	end
+	-- a piece's corners span a chord: lifted so that the middle of the largest piece (the middle one) is at
+	-- height h; the others, smaller on the sphere, sag less
+	sh.hv = (rt + h) * sqrt(1 + (k / nA) ^ 2 + (k2 / nB) ^ 2) - rt
+	sh.vx, sh.vy, sh.vz = vx, vy, vz
+	-- how far it reaches from its middle (radians, with 0.02 to spare), as its cosine and sine
+	local reach = math.atan(sqrt(k * k + k2 * k2)) + 0.02
+	sh.cosR, sh.sinR = cos(reach), sin(reach)
 end
+-- whether some of a placed sheet may face the camera: its middle no further past the planet's edge (as
+-- seen from the camera at the corners' height) than the sheet reaches. sx, sy, sz: the camera from the
+-- sphere's centre in its axes, dc its distance (SkyCamera). The angle from the camera's point to the middle
+-- below the edge's angle L plus the reach R, compared as cosines (both under 180 degrees): no acos per sheet.
+local function SheetMayShow(sh, sx, sy, sz, dc)
+	local r = G.rt + sh.hv
+	if dc <= r then return true end
+	local cosL = r / dc
+	local cosA = (sh.vx * sx + sh.vy * sy + sh.vz * sz) / dc
+	return cosA > cosL * sh.cosR - sqrt(1 - cosL * cosL) * sh.sinR
+end
+-- the camera from the sphere's centre in the sphere's axes, and its distance (for SheetMayShow)
+local function SkyCamera()
+	local cx, cy, cz = (G.cx - cam.x) * G.ax, (G.cy - cam.y) * G.ay, G.cz + G.rt -- east, north, up
+	local sx, sy, sz = cx * G.ex + cy * G.nx + cz * G.ox, cx * G.ey + cy * G.ny + cz * G.oy, cx * G.ez + cy * G.nz + cz * G.oz
+	return sx, sy, sz, sqrt(sx * sx + sy * sy + sz * sz)
+end
+-- Draws a placed sheet: the pieces facing the camera and on the canvas (hw, hh: half its size), each with its
+-- shadow piece moved on screen by ox, oy if the sheet has shadows. Returns how many pieces it drew.
+local function SheetDraw(sh, hw, hh, ox, oy)
+	local rt, r = G.rt, G.rt + sh.hv
+	local ex, ey, ez, nx, ny, nz, ox_, oy_, oz_ = G.ex, G.ey, G.ez, G.nx, G.ny, G.nz, G.ox, G.oy, G.oz
+	local fx, fy, fz, rx, ry, upx, upy, upz, F = G.fx, G.fy, G.fz, G.rx, G.ry, G.ux, G.uy, G.uz, G.F
+	local bx, by, bz = cam.x - G.cx, cam.y - G.cy, -rt - G.cz -- the sphere's centre from the camera
+	local rax, ray = r / G.ax, r / G.ay
+	local ux, uy, uz, px, py, ok = sh.ux, sh.uy, sh.uz, sh.px, sh.py, sh.ok
+	for vi = 1, sh.nv do
+		local a, b, c = ux[vi], uy[vi], uz[vi]
+		local dx = bx + (a * ex + b * ey + c * ez) * rax
+		local dy = by + (a * nx + b * ny + c * nz) * ray
+		local dz = bz + (a * ox_ + b * oy_ + c * oz_) * r
+		local d = dx * fx + dy * fy + dz * fz
+		if d > NEAR then
+			local s = F / d
+			px[vi], py[vi], ok[vi] = (dx * rx + dy * ry) * s, (dx * upx + dy * upy + dz * upz) * s, true
+		else
+			ok[vi] = false
+		end
+	end
+	local nA, texs, shs, on = sh.nA, sh.texs, sh.shs, sh.on
+	local shown = 0
+	for p = 1, #texs do
+		local i = (p - 1) % nA
+		local v1 = (p - 1 - i) / nA * (nA + 1) + i + 1 -- the piece's upper left corner; lower left a row down
+		local v2 = v1 + nA + 1
+		local draw = ok[v1] and ok[v2] and ok[v1 + 1] and ok[v2 + 1]
+		if draw then
+			local x1, y1, x2, y2, x3, y3, x4, y4 = px[v1], py[v1], px[v2], py[v2], px[v1 + 1], py[v1 + 1], px[v2 + 1], py[v2 + 1]
+			-- facing (upper left, lower left, lower right counter-clockwise on screen, y up) and on the canvas
+			draw = (x2 - x1) * (y4 - y1) - (x4 - x1) * (y2 - y1) > 0
+				and not ((x1 < -hw and x2 < -hw and x3 < -hw and x4 < -hw) or (x1 > hw and x2 > hw and x3 > hw and x4 > hw)
+					or (y1 < -hh and y2 < -hh and y3 < -hh and y4 < -hh) or (y1 > hh and y2 > hh and y3 > hh and y4 > hh))
+			if draw then
+				Corners(texs[p], x1, y1, x2, y2, x3, y3, x4, y4)
+				if shs then Corners(shs[p], x1 + ox, y1 + oy, x2 + ox, y2 + oy, x3 + ox, y3 + oy, x4 + ox, y4 + oy) end
+				shown = shown + 1
+			end
+		end
+		if draw ~= on[p] then
+			on[p] = draw
+			if draw then texs[p]:Show() else texs[p]:Hide() end
+			if shs then if draw then shs[p]:Show() else shs[p]:Hide() end end
+		end
+	end
+	return shown
+end
+local function SheetHide(sh)
+	if not sh then return end
+	for p = 1, #sh.texs do
+		if sh.on[p] then
+			sh.on[p] = false
+			sh.texs[p]:Hide()
+			if sh.shs then sh.shs[p]:Hide() end
+		end
+	end
+end
+-- the sheet's colour (and its shadows' darkness), set on its pieces only when it changed
+local function SheetColor(sh, r, g, b, a, sa)
+	if sh.cr ~= r or sh.cg ~= g or sh.cb ~= b or sh.ca ~= a then
+		sh.cr, sh.cg, sh.cb, sh.ca = r, g, b, a
+		for p = 1, #sh.texs do sh.texs[p]:SetVertexColor(r, g, b, a) end
+	end
+	if sa and sh.sa ~= sa then
+		sh.sa = sa
+		for p = 1, #sh.shs do sh.shs[p]:SetVertexColor(0, 0, 0, sa) end
+	end
+end
+-- a placed sheet's middle on screen (at height h) and pixels per yard there, or nil
+local function SheetMiddle(sh, h)
+	local sx, sy, d = Project(WorldOfUnit(sh.vx, sh.vy, sh.vz, h))
+	if not sx then return nil end
+	return sx, sy, G.F / d
+end
+-- pieces across and down for a sheet of half sizes s and s2
+local function Pieces(s, s2) return max(1, math.ceil(s / PIECE)), max(1, math.ceil(s2 / PIECE)) end
 
 -- the planet's light at a screen point (1 lit, less on the side away from the light), as the land has it
 local function LightAt(x, y, shadeK)
@@ -717,33 +821,33 @@ local SHADOW_X, SHADOW_Y = -LIGHT[1] / LIGHT[3], -LIGHT[2] / LIGHT[3]
 local function DrawClouds(alpha)
 	local shown = 0
 	if #clouds == 0 then MakeClouds() end
+	local hw, hh = canvas:GetSize()
+	hw, hh = hw / 2 + 2, hh / 2 + 2
+	local sx, sy, sz, dc
+	if alpha > 0.01 and not G.flat then sx, sy, sz, dc = SkyCamera() end
 	for _, c in ipairs(clouds) do
-		local ok, vx, vy, vz
-		if alpha > 0.01 then ok, vx, vy, vz = QuadOnSphere(c.X, c.Y, c.size, c.rot, CLOUD_H, c.size2) end
-		if ok then
-			if not c.tex then
-				c.tex, c.sh = cloudPool.Get(), shadowPool.Get()
-				c.tex:SetTexture(c.file); c.sh:SetTexture(c.file)
-				-- southern storms turn the other way: their spiral mirrored
-				if c.mirror then c.tex:SetTexCoord(1, 0, 0, 1); c.sh:SetTexCoord(1, 0, 0, 1) end
+		local drawn = 0
+		if alpha > 0.01 and not G.flat then
+			local sh = c.sheet
+			if not sh then
+				local nA, nB = Pieces(c.size, c.size2)
+				sh = NewSheet(nA, nB, c.mirror, c.file, cloudPool, shadowPool) -- (made the first time it is drawn)
+				c.sheet, c.texs, c.shs = sh, sh.texs, sh.shs
 			end
-			Corners(c.tex, qx_[1], qy_[1], qx_[2], qy_[2], qx_[3], qy_[3], qx_[4], qy_[4])
-			local face = Smooth(FacingCamera(vx, vy, vz) / 0.35)
-			local mx, my = (qx_[1] + qx_[4]) / 2, (qy_[1] + qy_[4]) / 2
-			local light = LightAt(mx, my, alpha)
-			local a = alpha * c.alpha * face
-			c.tex:SetVertexColor(light, light, light, a)
-			c.tex:Show()
-			-- the shadow: the same shape on the surface below, toward the lower right, faint, none at night
-			local ppy = sqrt((qx_[3] - qx_[1]) ^ 2 + (qy_[3] - qy_[1]) ^ 2) / (2 * c.size) -- pixels per yard there
-			local ox, oy = SHADOW_X * CLOUD_H * ppy, SHADOW_Y * CLOUD_H * ppy
-			Corners(c.sh, qx_[1] + ox, qy_[1] + oy, qx_[2] + ox, qy_[2] + oy, qx_[3] + ox, qy_[3] + oy, qx_[4] + ox, qy_[4] + oy)
-			c.sh:SetVertexColor(0, 0, 0, a * 0.3 * light)
-			c.sh:Show()
-			shown = shown + 1
-		elseif c.tex then
-			c.tex:Hide(); c.sh:Hide()
+			SheetPlace(sh, c.X, c.Y, c.size, c.size2, c.rot, CLOUD_H)
+			local mx, my, ppy
+			if SheetMayShow(sh, sx, sy, sz, dc) then mx, my, ppy = SheetMiddle(sh, CLOUD_H) end
+			if mx then
+				-- the shadow: the same shape on the surface below, toward the lower right, faint, none at night
+				local ox, oy = SHADOW_X * CLOUD_H * ppy, SHADOW_Y * CLOUD_H * ppy
+				drawn = SheetDraw(sh, hw, hh, ox, oy)
+				local light = LightAt(mx, my, alpha)
+				light = floor(light * 64 + 0.5) / 64
+				local a = alpha * c.alpha
+				SheetColor(sh, light, light, light, a, a * 0.3 * light)
+			end
 		end
+		if drawn == 0 then SheetHide(c.sheet) else shown = shown + 1 end
 	end
 	return shown
 end
@@ -761,30 +865,40 @@ local function FlashLevel(u)
 	if u < 0 then return 0 elseif u < 0.05 then return 1 elseif u < 0.10 then return 0.25 elseif u < 0.16 then return 0.9 end
 	return max(0, 0.9 * (1 - (u - 0.16) / 0.2))
 end
+local maelSheet, stormSheet, boltSheet
+do
+	local a, b = Pieces(MAEL_SIZE, MAEL_SIZE)
+	maelSheet = NewSheet(a, b, false, MEDIA .. "Maelstrom", Pool(oceanFrame, "OVERLAY"))
+	a, b = Pieces(STORM_SIZE, STORM_SIZE)
+	stormSheet = NewSheet(a, b, false, MEDIA .. "MaelstromStorm", Pool(skyFrame, "OVERLAY", 1)) -- (over the clouds)
+	a, b = Pieces(0.37 * MAEL_SIZE, 0.37 * MAEL_SIZE) -- (a flash: at most 0.37 x the whirlpool)
+	boltSheet = NewSheet(a, b, false, MEDIA .. "MaelstromBolt", Pool(skyFrame, "OVERLAY", 2))
+end
+for _, tex in ipairs(boltSheet.texs) do tex:SetBlendMode("ADD") end
+ns.globeSheets = { mael = maelSheet, storm = stormSheet, bolt = boltSheet } -- (for the tests)
 local function DrawMaelstrom(alpha)
-	if alpha <= 0.01 or not QuadOnSphere(MX, MY, MAEL_SIZE, maelAngle, 0) then
-		mael:Hide(); storm:Hide(); bolt:Hide()
+	local hw, hh = canvas:GetSize()
+	hw, hh = hw / 2 + 2, hh / 2 + 2
+	local mx, my
+	if alpha > 0.01 and not G.flat then
+		SheetPlace(maelSheet, MX, MY, MAEL_SIZE, MAEL_SIZE, maelAngle, 0)
+		mx, my = SheetMiddle(maelSheet, 0)
+	end
+	if not (mx and SheetDraw(maelSheet, hw, hh) > 0) then
+		SheetHide(maelSheet); SheetHide(stormSheet); SheetHide(boltSheet)
 		return false
 	end
-	Corners(mael, qx_[1], qy_[1], qx_[2], qy_[2], qx_[3], qy_[3], qx_[4], qy_[4])
-	local light = LightAt((qx_[1] + qx_[4]) / 2, (qy_[1] + qy_[4]) / 2, alpha)
-	mael:SetVertexColor(light, light, light, alpha * 0.95)
-	mael:Show()
-	if QuadOnSphere(MX, MY, STORM_SIZE, stormAngle, CLOUD_H * 1.5) then
-		Corners(storm, qx_[1], qy_[1], qx_[2], qy_[2], qx_[3], qy_[3], qx_[4], qy_[4])
-		storm:SetVertexColor(light, light, light, alpha * 0.9)
-		storm:Show()
-	else
-		storm:Hide()
-	end
+	local lit = LightAt(mx, my, alpha)
+	SheetColor(maelSheet, lit, lit, lit, alpha * 0.95)
+	SheetPlace(stormSheet, MX, MY, STORM_SIZE, STORM_SIZE, stormAngle, CLOUD_H * 1.5)
+	if SheetDraw(stormSheet, hw, hh) > 0 then SheetColor(stormSheet, lit, lit, lit, alpha * 0.9) else SheetHide(stormSheet) end
 	local level = FlashLevel(GetTime() - flash.at) * alpha
-	if level > 0.01 and QuadOnSphere(flash.X, flash.Y, flash.size, flash.rot, CLOUD_H * 1.6) then
-		Corners(bolt, qx_[1], qy_[1], qx_[2], qy_[2], qx_[3], qy_[3], qx_[4], qy_[4])
-		bolt:SetVertexColor(1, 1, 1, level)
-		bolt:Show()
-	else
-		bolt:Hide()
+	local flashing = false
+	if level > 0.01 then
+		SheetPlace(boltSheet, flash.X, flash.Y, flash.size, flash.size, flash.rot, CLOUD_H * 1.6)
+		flashing = SheetDraw(boltSheet, hw, hh) > 0
 	end
+	if flashing then SheetColor(boltSheet, 1, 1, 1, level) else SheetHide(boltSheet) end
 	return true
 end
 -- the Maelstrom's clock: turns it, and starts a flash every 1.5 to 5.5 seconds somewhere in the storm
@@ -807,7 +921,7 @@ ns.GlobeFlash = flash -- (for the tests)
 local function DrawArrow()
 	local p = ns.player
 	if not (p and p.on and layout[p.map]) then arrow:Hide() return false end
-	local s = max(3, cam.dist * 0.05)
+	local s = ns.ArrowHalf(cam.dist) -- the ground arrow's size on screen (ARROW_PX across), so nothing jumps at the hand-over
 	local f = p.facing
 	local fwx, fwy = -sin(f), cos(f)
 	local rtx, rty = cos(f), sin(f)
@@ -1236,7 +1350,7 @@ driver:SetScript("OnUpdate", function(_, elapsed)
 	local dirty = DragStep()
 	if active then
 		MaelstromStep(elapsed)
-		if not dirty and mael:IsShown() then DrawMaelstrom(G.stats.k or 0) end
+		if not dirty and G.stats.mael then G.stats.mael = DrawMaelstrom(G.stats.k or 0) end
 	end
 	if dirty then ns.Render() end
 end)

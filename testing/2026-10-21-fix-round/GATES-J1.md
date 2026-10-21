@@ -1,0 +1,22 @@
+# GATES J1: terrain (smooth level changes, better far ground)
+
+Measured with `tools/sandbox/test_terrain.py` (before: `GPS3D_LUA=<GPS3D.lua at 8131b6d> python3 test_terrain.py`), from the code as committed. Frame times are processor time (`time.process_time`), best of two alternating runs, because other jobs share the machine (2 cores, load 4-6).
+
+- [x] G1 Pops: zooming 2 % a frame from 14,000 to 30 yd, tilted 45 and straight down, at Mount Hyjal, Durotar near Orgrimmar and Elwynn Forest: per-frame change of the drawn ground at fixed world points (px), largest and 99th percentile, before and after; after much smaller.
+  EVIDENCE (largest / p99 px, before -> after):
+  Hyjal tilted 49.6 / 2.06 -> 14.4 / 0.95; Hyjal down 23.9 / 0.015 -> 5.5 / 0.41; Durotar tilted 121.1 / 3.25 -> 10.4 / 2.20; Durotar down 159.6 / 0.98 -> 9.9 / 0.61; Elwynn tilted 104.6 / 0.65 -> 7.3 / 0.44; Elwynn down 21.3 / 0.21 -> 2.7 / 0.22.
+  Largest jump 3.4 to 16 x smaller everywhere. p99 lower in four runs, the same at Elwynn straight down, higher at Hyjal straight down (0.015 -> 0.41 px): before, the ground there stood still between pops; now vertices glide toward the coarser step as the camera moves (geomorphing spreads each change over the zoom instead of one frame). test_terrain check 1 (largest < 25 px, p99 < 2.5 px): before FAIL, after PASS.
+- [x] G2 Far quality: Hyjal 5,000 yd tilted 45, Stormwind 3,000 yd tilted 45, Durotar 4,000 yd straight down: height error of the drawn ground against the full grid in screen px (mean, 95th percentile), before and after; within the budget.
+  EVIDENCE (mean / p95 px, triangles):
+  before: Hyjal 2.62 / 10.12 (1,054), Stormwind 2.55 / 12.00 (2,390), Durotar 1.30 / 5.57 (760).
+  after, as shipped (1.3 x the old rule's count on the tiles in view, at the old frame time, see G4): Hyjal 2.20 / 8.44 (1,254), Stormwind 2.08 / 8.94 (2,624), Durotar 1.28 / 5.33 (988): -16 %, -18 %, -2 %.
+  after, capped at exactly the old count (`FAR_BUDGET=1054,2390,760`): Hyjal 2.33 / 8.78, Stormwind 2.17 / 9.26, Durotar 1.32 / 5.49: -11 %, -15 %, +2 % (straight down at 4,000 yd every tile is about as far away, and geomorphing leaves part of each finer tile part way to the coarser step; the best possible allocation there, computed offline per tile and step, is only 13 % better than the old rule even without morphing).
+  test_terrain check 3: before FAIL, after PASS.
+- [x] G3 No cracks: SEAMCHECK passes; shared tile edges drawn at the same heights from both sides while morphing.
+  EVIDENCE: test_world "no cracks: shared tile edges have equal heights" PASS, 109 edges, worst 5.7e-06 yd. test_terrain over all six zooms: worst 9.4e-12 yd with 6,507 morphing tiles and 8,937 edges between different steps (before: 43 yd, the 50 shared edges whose heights differ in the data). Mutation (edge vertices on their own tile's thresholds instead of the smaller of the two): 6.0e+02 yd, FAIL.
+- [x] G4 Frame time at the far views and during the zoom not worse than +15 %.
+  EVIDENCE (ms, before -> after): Hyjal 5,000 yd turning 2.86 -> 2.84; Stormwind 3,000 yd 3.62 -> 3.84 (+6 %); Durotar 4,000 yd 2.06 -> 1.93; zoom, all six runs, mean 8.02 -> 7.78 (worst single run, Hyjal straight down, 5.78 -> 6.39, +11 %). Paid for by skipping tiles out of view before BoxInView's eight corners (exactly the tiles it turns down) and not drawing the ground of tiles wholly beside the view.
+- [x] G5 Hand-over to the planet unchanged: test_globe passes (corner heights as the planet takes them), check_globezoom passes; every tile at its coarsest step just short of 18,000 yd.
+  EVIDENCE: test_globe 54 of 54 (c_identical now lets the ground settle 60 frames before comparing, since the level of detail carries state from frame to frame); check_globezoom 8 of 8; test_terrain check 4 (17,900 yd: {32: 724}) PASS; mutation (no fade to the coarsest step) {16: 72, 32: 652}, FAIL.
+- [x] G6 Suites: test_world, test_globe, check_globezoom (run_page.py), test_models, test_look, test_luac pass; new checks fail on the old code and pass on the new.
+  EVIDENCE: test_world 60/60, test_globe 54/54, check_globezoom 8/8, test_models 50/50 (its rollback check now compares tiles, building blocks and models but not the grid's triangle count, which this job changes by design), test_look 35/35, test_luac 3/3 (GPS3D.lua 196/200 locals, 57/60 upvalues), test_terrain 4/4 (old code: 1/4; mutations: no morphing fails checks 1 and 2, own-tile edge thresholds fails check 2, no hand-over fade fails check 4).

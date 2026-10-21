@@ -459,6 +459,7 @@ function FontString:SetTextScale(scale)
 	relayout(self)
 end
 function FontString:GetTextScale() local b = self._baseFont; return b and self._font.size / b.size or 1 end
+function FontString:GetFont() local f = self._font; return "Fonts\\FRIZQT__.TTF", f.size, "" end
 function FontString:SetFont(_, size) self._font = { size = size or 12, color = self._font.color, name = "custom" }; self._baseFont = nil; relayout(self) end
 function FontString:SetJustifyH(j) self._justify = ({ LEFT = 0, CENTER = 1, RIGHT = 2 })[j:upper()] or 1; touch() end
 function FontString:SetJustifyV() end
@@ -885,7 +886,85 @@ function debugprofilestop() return os.clock() * 1000 end
 function GetFramerate() return S.fps or 60 end
 function GetBuildInfo() return "1.60.1", "sandbox", "Oct 2026", 16001 end
 function GetLocale() return "enUS" end
-function InCombatLockdown() return false end
+-- Combat (SANDBOX_COMBAT(true|false) fires PLAYER_REGEN_DISABLED / ENABLED); out of combat by default.
+S.combat = false
+function InCombatLockdown() return S.combat end
+function SANDBOX_COMBAT(on)
+	S.combat = on and true or false
+	SANDBOX_FIRE(on and "PLAYER_REGEN_DISABLED" or "PLAYER_REGEN_ENABLED")
+end
+-- Key bindings: the player's bindings (S.bindings: command -> keys; Blizzard's map key on M, the quest
+-- log on L), the override bindings frames lay over them (SetOverrideBinding, SetOverrideBindingClick,
+-- ClearOverrideBindings; refused in combat as the game refuses protected calls from addons, with an
+-- ADDON_ACTION_BLOCKED event; each change answered with UPDATE_BINDINGS, as the game may), and a key
+-- press (SANDBOX_PRESS(key): the newest override on the key, else the player's binding). What a
+-- command does: S.bindingActions[command] (a function), filled from an addon's Bindings.xml by
+-- SANDBOX_BINDINGS_XML(xml) or by a test for Blizzard's own.
+S.bindings = { TOGGLEWORLDMAP = { "M" }, TOGGLEQUESTLOG = { "L" } }
+S.overrides = {}       -- list of { owner, key, command }, newest last
+S.bindingActions = {}
+S.blocked = {}         -- protected calls refused in combat (for the tests)
+local function Blocked(what)
+	S.blocked[#S.blocked + 1] = what
+	SANDBOX_FIRE("ADDON_ACTION_BLOCKED", "sandbox", what)
+	return true
+end
+function GetBindingKey(command)
+	local keys = S.bindings[command]
+	if keys then return table.unpack(keys) end
+end
+function GetBindingAction(key, checkOverride)
+	if checkOverride then
+		for i = #S.overrides, 1, -1 do if S.overrides[i].key == key then return S.overrides[i].command end end
+	end
+	for command, keys in pairs(S.bindings) do for _, k in ipairs(keys) do if k == key then return command end end end
+	return ""
+end
+local function SetOverride(owner, key, command)
+	for i = #S.overrides, 1, -1 do
+		local o = S.overrides[i]
+		if o.owner == owner and o.key == key then table.remove(S.overrides, i) end
+	end
+	if command and command ~= "" then S.overrides[#S.overrides + 1] = { owner = owner, key = key, command = command } end
+	SANDBOX_FIRE("UPDATE_BINDINGS")
+end
+function SetOverrideBinding(owner, isPriority, key, command)
+	if S.combat then return Blocked("SetOverrideBinding()") end
+	SetOverride(owner, key, command)
+end
+function SetOverrideBindingClick(owner, isPriority, key, buttonName, mouseButton)
+	if S.combat then return Blocked("SetOverrideBindingClick()") end
+	SetOverride(owner, key, "CLICK " .. buttonName .. ":" .. (mouseButton or "LeftButton"))
+end
+function ClearOverrideBindings(owner)
+	if S.combat then return Blocked("ClearOverrideBindings()") end
+	local any = false
+	for i = #S.overrides, 1, -1 do if S.overrides[i].owner == owner then table.remove(S.overrides, i); any = true end end
+	if any then SANDBOX_FIRE("UPDATE_BINDINGS") end
+end
+-- the player binds a command to keys (the game's key binding panel)
+function SANDBOX_BIND(command, ...)
+	S.bindings[command] = { ... }
+	SANDBOX_FIRE("UPDATE_BINDINGS")
+end
+function SANDBOX_PRESS(key)
+	local command = GetBindingAction(key, true)
+	if command == "" then return nil end
+	local button = command:match("^CLICK ([^:]+):")
+	if button then
+		local b = _G[button]
+		if b and b._scripts.OnClick then call(b._scripts.OnClick, b, "LeftButton", true) end
+	elseif S.bindingActions[command] then
+		call(S.bindingActions[command])
+	end
+	return command
+end
+function SANDBOX_BINDINGS_XML(xml)
+	for name, body in xml:gmatch('<Binding%s+name="([^"]+)"[^>]*>(.-)</Binding>') do
+		local f = load(body, "=" .. name)
+		if f then S.bindingActions[name] = f end
+	end
+end
 function IsShiftKeyDown() return false end
 function IsControlKeyDown() return false end
 function IsAltKeyDown() return false end
@@ -1130,9 +1209,10 @@ Enum.UIMapType = { Cosmic = 0, World = 1, Continent = 2, Zone = 3, Dungeon = 4, 
 S.cvars = { questPOI = true }
 function GetCVarBool(name) return S.cvars[name] end
 function GetCVar(name) local v = S.cvars[name]; if v == nil then return nil end return v and "1" or "0" end
--- point: world X, Y; at: the area's middle (X, Y) and half-sizes in yards (north-south, east-west)
+-- point: world X, Y; at: the area's middle (X, Y) and half-sizes in yards (north-south, east-west);
+-- at2: a second ellipse joined to the first (quest 33: a waisted shape, so the area has a concave edge)
 S.quests = {
-	{ questID = 33, title = "Wolves Across the Border", zone = 1429, point = { -9067, -68 }, objectives = { { "Tough Wolf Meat: 3/8", false } }, at = { -9086, -68, 114, 117 } },
+	{ questID = 33, title = "Wolves Across the Border", zone = 1429, point = { -9067, -68 }, objectives = { { "Tough Wolf Meat: 3/8", false } }, at = { -9086, -68, 114, 117 }, at2 = { -9010, -170, 70, 90 } },
 	{ questID = 7, title = "Kobold Camp Cleanup", zone = 1429, point = { -8839, -302 }, objectives = { { "Kobold Vermin slain: 6/10", false } }, at = { -8839, -328, 66, 78 } },
 	{ questID = 60, title = "Kobold Candles", zone = 1429, point = { -9770, 140 }, objectives = { { "Large Candle: 2/8", false } }, at = { -9789, 140, 76, 91 } },
 	{ questID = 176, title = "Wanted: \"Hogger\"", zone = 1429, point = { -9884, 608 }, objectives = { { "Huge Gnoll Claw: 0/1", false } }, at = { -9903, 634, 57, 78 } },
@@ -1150,6 +1230,10 @@ function S.placeQuests()
 		if q.at then
 			local ax, ay = S.uiMapFromWorld(b, q.at[1], q.at[2])
 			q.area = { ax, ay, q.at[4] / (b[3] - b[4]), q.at[3] / (b[1] - b[2]) }
+		end
+		if q.at2 then
+			local ax, ay = S.uiMapFromWorld(b, q.at2[1], q.at2[2])
+			q.area2 = { ax, ay, q.at2[4] / (b[3] - b[4]), q.at2[3] / (b[1] - b[2]) }
 		end
 	end
 end
@@ -1229,8 +1313,14 @@ function S.makePOIButton(f)
 	f:Hide()
 end
 
--- QuestPOIFrame, a stand-in: each drawn quest's area as an ellipse image placed by texture
--- coordinates over the whole frame (the frame is the zone's 0..1 rectangle)
+-- QuestPOIFrame, a stand-in: each drawn quest's area as an ellipse image (two for quest 33) placed by
+-- texture coordinates over the whole frame (the frame is the zone's 0..1 rectangle). Its hit-test
+-- (UpdateMouseOverTooltip, x and y from 0 to 1 over the zone) answers from the same ellipses.
+-- S.blobAnswers says when the hit-test answers, to try GPS's fallbacks: "always" (default: also while
+-- the frame is hidden), "shown" (only while it is visible), "drawn" (only while visible at an alpha
+-- above 0), "never".
+S.blobAnswers = "always"
+S.blobHits = 0
 local BLOB = {}
 function BLOB:SetMapID(id) self._mapID = id end
 function BLOB:GetMapID() return self._mapID end
@@ -1245,6 +1335,7 @@ function BLOB:SetNumSplinePoints() end
 function BLOB:SetMergeThreshold() end
 function BLOB:DrawNone()
 	for _, t in ipairs(self._blobs) do t:Hide() end
+	for _, t in ipairs(self._blobs2 or {}) do t:Hide() end
 	self._drawn = {}
 end
 function BLOB:DrawBlob(id, draw)
@@ -1260,17 +1351,49 @@ function BLOB:DrawBlob(id, draw)
 		t:SetAllPoints(self)
 		self._blobs[n] = t
 	end
-	local cx, cy, rx, ry = q.area[1], q.area[2], q.area[3], q.area[4]
-	local l, top = (0 - (cx - rx)) / (2 * rx), (0 - (cy - ry)) / (2 * ry)
-	t:SetTexCoord(l, l + 1 / (2 * rx), top, top + 1 / (2 * ry))
-	t:Show()
+	local function place(t, a)
+		local cx, cy, rx, ry = a[1], a[2], a[3], a[4]
+		local l, top = (0 - (cx - rx)) / (2 * rx), (0 - (cy - ry)) / (2 * ry)
+		t:SetTexCoord(l, l + 1 / (2 * rx), top, top + 1 / (2 * ry))
+		t:Show()
+	end
+	place(t, q.area)
+	if q.area2 then
+		self._blobs2 = self._blobs2 or {}
+		local t2 = self._blobs2[n]
+		if not t2 then
+			t2 = self:CreateTexture(nil, "ARTWORK")
+			t2:SetTexture("Interface\\GPSSandbox\\QuestBlob")
+			t2:SetAllPoints(self)
+			self._blobs2[n] = t2
+		end
+		place(t2, q.area2)
+	end
+end
+-- inside one of quest q's ellipses (x, y over the zone, 0 to 1)
+function S.inQuestArea(q, x, y)
+	for _, a in ipairs({ q.area, q.area2 }) do
+		local dx, dy = (x - a[1]) / a[3], (y - a[2]) / a[4]
+		if dx * dx + dy * dy <= 1 then return true end
+	end
+	return false
+end
+local function answers(f)
+	local w = S.blobAnswers
+	if w == "never" then return false end
+	if w == "always" then return true end
+	if not f:IsVisible() then return false end
+	if w == "shown" then return true end
+	local a, o = 1, f
+	while o do a = a * (o._alpha or 1); o = o._parent end
+	return a > 0
 end
 function BLOB:DrawAll() end
 function BLOB:UpdateMouseOverTooltip(x, y)
+	S.blobHits = S.blobHits + 1
+	if not answers(self) then return nil end
 	for _, q in ipairs(self._drawn) do
-		local a = q.area
-		local dx, dy = (x - a[1]) / a[3], (y - a[2]) / a[4]
-		if dx * dx + dy * dy <= 1 then return q.questID, #q.objectives end
+		if S.inQuestArea(q, x, y) then return q.questID, #q.objectives end
 	end
 	return nil
 end
@@ -1324,13 +1447,20 @@ do
 	QuestBlobDataProviderMixin = { _name = "QuestBlobDataProviderMixin", OnAdded = function(self, map) self.owningMap = map end }
 	function QuestBlobDataProviderMixin:LayoutPins(sc, cw, ch)
 		local q = S.questByID[S.superTracked or 0]
-		if not self.tex then self.tex = sc.Child:CreateTexture(nil, "ARTWORK", nil, 2); self.tex:SetTexture("Interface\\GPSSandbox\\QuestBlobWhole") end
-		if not (q and q.area and q.zone == sc.mapID) then self.tex:Hide() return end
-		local a = q.area
-		self.tex:ClearAllPoints()
-		self.tex:SetPoint("TOPLEFT", sc.Child, "TOPLEFT", (a[1] - a[3]) * cw, -(a[2] - a[4]) * ch)
-		self.tex:SetSize(2 * a[3] * cw, 2 * a[4] * ch)
-		self.tex:Show()
+		self.texs = self.texs or {}
+		for i = 1, 2 do
+			local tex = self.texs[i]
+			if not tex then tex = sc.Child:CreateTexture(nil, "ARTWORK", nil, 2); tex:SetTexture("Interface\\GPSSandbox\\QuestBlobWhole"); self.texs[i] = tex end
+			local a = q and q.zone == sc.mapID and (i == 1 and q.area or q.area2)
+			if a then
+				tex:ClearAllPoints()
+				tex:SetPoint("TOPLEFT", sc.Child, "TOPLEFT", (a[1] - a[3]) * cw, -(a[2] - a[4]) * ch)
+				tex:SetSize(2 * a[3] * cw, 2 * a[4] * ch)
+				tex:Show()
+			else
+				tex:Hide()
+			end
+		end
 	end
 	AreaLabelDataProviderMixin = { _name = "AreaLabelDataProviderMixin", OnAdded = function(self, map) self.owningMap = map end, SetOffsetY = function(self, y) self.offsetY = y end }
 	MapCanvasScrollControllerMixin = {}

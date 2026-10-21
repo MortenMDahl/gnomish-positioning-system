@@ -40,7 +40,7 @@ def check(name, ok, detail=''):
     return bool(ok)
 
 class Game:
-    def __init__(self, patch=None, with_models=True, wmo=True, before=False, props=None, buildings='game'):
+    def __init__(self, patch=None, with_models=True, wmo=True, before=False, props=None, buildings='game', models_file=True):
         if MUT and not patch: patch = MUTATIONS[MUT][0]
         OLD = os.path.join(ROOT, 'notes', 'rollback-before-game-models')
         self.L = lupa54.LuaRuntime(); G = self.G = self.L.globals()
@@ -52,6 +52,7 @@ class Game:
         for addon, files in [('GnomishPositioningSystem', GPS_FILES), ('GPS3D', files3d)]:
             for f in files:
                 if not with_models and f.startswith('Data/Models_'): continue
+                if not models_file and (f == 'Models.lua' or f.startswith('Data/Models_')): continue
                 # (the saved TOC lists Detail_1_4.lua, which the build no longer makes since caves are left out)
                 if before and f.startswith('Data/Detail_') and not os.path.exists(f'{SITE}/addons/{addon}/{f}'): continue
                 src = open(os.path.join(OLD, 'GPS3D.lua') if before and f == 'GPS3D.lua' else f'{SITE}/addons/{addon}/{f}').read()
@@ -476,10 +477,16 @@ def views(game, off):
         st_ = game.ns.stats
         out.append((int(st_.tiles), int(st_.tris), int(st_.detail), int(st_.detailTris), sum(1 for a in game.actors())))
     return out
+# (since 2026-10-21 the building blocks are chosen differently, ns.ChooseBlocks: every block in view, levels lowered
+# evenly; so the blocks are compared with today's 3D view without Models.lua, the ground with the saved copy)
 before_v = views(Game(before=True), False)
+bare_v = views(Game(models_file=False, buildings=None), False)
 off_v = views(Game(), True)
-check('switched off (simplified shapes, no props), the 3D view draws what it drew before the models (tiles, triangles, building blocks; no game models)', before_v == off_v and all(v[4] == 0 for v in off_v),
-      f'before {before_v}, now {off_v}')
+# (not the grid's triangles either: since 2026-10-21 the ground's level of detail is chosen differently, GPS3D.lua's Lod;
+# so against the copy from before the models only the tiles are compared)
+check('switched off (simplified shapes, no props), the 3D view draws what it draws without the models (tiles, triangles, building blocks; no game models), and the same tiles as before the models',
+      bare_v == off_v and all(v[4] == 0 for v in off_v) and [v[0] for v in before_v] == [v[0] for v in off_v],
+      f'without Models.lua {bare_v}, switched off {off_v}, before the models (tiles) {[v[0] for v in before_v]}')
 # cost in the sandbox (native Lua, not the game): the choice, and frames with and without models
 import time
 g.free_view(GX, GY, 400, pitch=55, yaw=30); g.tick(30)

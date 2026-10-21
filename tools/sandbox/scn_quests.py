@@ -34,5 +34,17 @@ async def run():
     await page.wait_for_timeout(3000)
     print('3D markers shown:', await lua('(function() local n = 0; for _, p in ipairs(' + G3 + '.questPins) do if p:IsShown() then n = n + 1 end end; return n end)()'))
     await shot('quests_3d.png')
+    # the tracked quest's objective area on the ground (QuestAreas.lua): quest 33's waisted area, from
+    # above and tilted
+    await run_lua('C_SuperTrack.SetSuperTrackedQuestID(33)')
+    await page.wait_for_timeout(800)
+    await run_lua(G3 + '.SetTopDown(true, true); ' + G3 + '.cam.x, ' + G3 + '.cam.y = 32.2 * 1600 / 3, -48.97 * 1600 / 3; ' + G3 + '.cam.dist = 900; ' + G3 + '.Render()')
+    await page.wait_for_timeout(2500)
+    await run_lua(G3 + '.Render()'); await page.wait_for_timeout(800)
+    print('3D area:', await lua('string.format("%d areas, %d fill, %d border pieces; hovered %s", ' + G3 + '.questAreas.nShapes, ' + G3 + '.questAreas.nFill, ' + G3 + '.questAreas.nEdge, tostring(' + G1 + '.quests.hovered))'))
+    await shot('quests_3d_area.png')
+    await run_lua(G3 + '.SetTopDown(false, true); ' + G3 + '.cam.pitch = 48; ' + G3 + '.cam.yaw = 35; ' + G3 + '.cam.dist = 650; ' + G3 + '.Render()')
+    await page.wait_for_timeout(1500)
+    await shot('quests_3d_area_tilted.png')
     await page.fill('#cmdline', '/gps map'); await page.press('#cmdline', 'Enter'); await page.wait_for_timeout(1500)
     await shot('quests_map.png')

@@ -7,6 +7,8 @@
 #               Behind, your arrow with the view's cone opening from behind it; Free, four arrows (move).
 #   Map.tga     the mode ring in the traditional map: a folded map, three panels in a zigzag (white,
 #               tinted brass or gold like the camera icons).
+#   Globe.tga   the map-key globe (GPS's windows and Blizzard's map, top right): a round globe with
+#               an equator, two parallels and a meridian (white, tinted brass or gold like the others).
 #   Cell.tga    one square of ground: a white outline (black edge) inset by 1/8 of the texture on each
 #               side. GPS3D bends four of these with SetVertexOffset into a 2x2 grid seen the way the
 #               camera sees the ground (turned with the view, in perspective when tilted).
@@ -131,8 +133,23 @@ def cell():
     # thick strokes: the square is drawn only a few pixels wide in the ring
     return strokes([], [[(p, p), (1 - p, p), (1 - p, 1 - p), (p, 1 - p)]], black=0.24, white=0.13)
 
+def globe():
+    # bold enough to read at 15 px: the outline, the equator, a parallel either side (chords of the
+    # circle) and one meridian (a narrow ellipse), each a white line with a black edge
+    c, R = S / 2, S * 0.40
+    def draw(d, w, col, g):
+        d.ellipse([c - R, c - R, c + R, c + R], outline=col, width=w)
+        d.line([c - R, c, c + R, c], fill=col, width=w)
+        for k in (-0.5, 0.5):
+            y = c + k * R
+            half = (R * R - (k * R) ** 2) ** 0.5
+            d.line([c - half, y, c + half, y], fill=col, width=w)
+        m = R * 0.45
+        d.ellipse([c - m, c - R, c + m, c + R], outline=col, width=w)
+    return outlined(draw, black=0.10, white=0.05)
+
 os.makedirs(MEDIA, exist_ok=True)
-for name, img in (('Needle', needle()), ('CamFollow', cam_follow()), ('CamBehind', cam_behind()), ('CamFree', cam_free()), ('Map', folded_map()), ('Cell', cell())):
+for name, img in (('Needle', needle()), ('CamFollow', cam_follow()), ('CamBehind', cam_behind()), ('CamFree', cam_free()), ('Map', folded_map()), ('Cell', cell()), ('Globe', globe())):
     write_tga(img, os.path.join(MEDIA, name + '.tga'))
     if os.path.isdir(SANDBOX_UI):
         img.save(os.path.join(SANDBOX_UI, 'media-' + name.lower() + '.png'))

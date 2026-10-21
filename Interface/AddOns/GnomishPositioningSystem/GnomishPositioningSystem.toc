@@ -13,4 +13,5 @@ World.lua
 MapWindow.lua
 Quests.lua
 Compat.lua
+MapKey.lua
 Settings.lua

@@ -62,3 +62,4 @@ Data\Globe.lua
 GPS3D.lua
 Models.lua
 Globe.lua
+QuestAreas.lua

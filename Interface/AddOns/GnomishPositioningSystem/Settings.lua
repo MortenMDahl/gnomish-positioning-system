@@ -39,6 +39,14 @@ ns.settings = {
 		set = function(v) DB().autoTraditional = v end,
 	},
 	{
+		kind = "choice", key = "GPS_MapKey", name = "Map key opens",
+		tooltip = "What the game's map key (Toggle World Map, M unless you changed it) opens. GPS: the key opens and closes GPS (in the mode above) in place of Blizzard's map. Blizzard's map: nothing of the game's changes; GPS's own key binding still opens GPS. The globe buttons at the top right of GPS's windows and of Blizzard's map switch it too (/gps mapkey gps|blizzard).",
+		default = ns.defaults.mapKey,
+		choices = function() return { { "gps", "GPS" }, { "blizzard", "Blizzard's map" } } end,
+		get = function() return ns.mapkey.Choice() end,
+		set = function(v) ns.mapkey.Set(v) end,
+	},
+	{
 		kind = "button", name = "Window", text = "Reset",
 		tooltip = "Put the map window back in the middle of the screen at its first size (/gps reset).",
 		click = function() ns.ResetWindow() end,

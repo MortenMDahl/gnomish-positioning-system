@@ -3,6 +3,8 @@
 #   minimap-background.png        Interface\Minimap\UI-Minimap-Background (dark disc behind a ring)
 #   zoombutton-highlight.png      Interface\Minimap\UI-Minimap-ZoomButton-Highlight (hover glow)
 #   atlas-redbutton-exit[-pressed].png, atlas-redbutton-highlight.png   the red close button atlases
+#   atlas-redbutton-expand[-pressed].png, atlas-redbutton-condense[-pressed].png   the maximize / minimize
+#                                 button atlases (an arrow to the top right corner, or back from it)
 #   questpoi.png                  Interface\WorldMap\UI-QuestPoi-NumberIcons (the quest button's disc; tinted)
 #   questblob.png                 a quest's objective area (the game draws these itself, QuestPOIFrame)
 # Usage: python make_standins.py
@@ -45,6 +47,31 @@ def redx(state):
         d.line([S * 0.68 + o, S * 0.32 + o, S * 0.32 + o, S * 0.68 + o], fill=col, width=int(w))
     done(im, n, 'atlas-redbutton-exit.png' if state == 'up' else 'atlas-redbutton-exit-pressed.png')
 
+def redarrow(kind, state):
+    # the red button as in redx, with a gold diagonal arrow: expand points to the top right corner,
+    # condense back toward the middle
+    n = 32; im = canvas(n); d = ImageDraw.Draw(im); S = n * K
+    d.rounded_rectangle([S * 0.08, S * 0.08, S * 0.92, S * 0.92], S * 0.16, fill=(0, 0, 0, 255))
+    d.rounded_rectangle([S * 0.12, S * 0.12, S * 0.88, S * 0.88], S * 0.13, fill=(110, 110, 110, 255))
+    top, bot = ((150, 30, 24), (80, 10, 8)) if state == 'up' else ((90, 14, 10), (60, 8, 6))
+    for i in range(30):
+        t = i / 29; col = tuple(int(top[k] + (bot[k] - top[k]) * t) for k in range(3)) + (255,)
+        y0 = S * (0.17 + 0.66 * t); d.rectangle([S * 0.17, y0, S * 0.83, y0 + S * 0.03], fill=col)
+    o = S * (0.03 if state == 'pressed' else 0)
+    a, b = (0.32, 0.68), (0.68, 0.32)               # tail, head (expand: toward the top right)
+    if kind == 'condense': a, b = (0.70, 0.30), (0.36, 0.64)
+    hx, hy = b; tx, ty = a
+    ux, uy = (hx - tx), (hy - ty); L = (ux * ux + uy * uy) ** 0.5; ux, uy = ux / L, uy / L
+    head = [(hx, hy), (hx - ux * 0.2 - uy * 0.12, hy - uy * 0.2 + ux * 0.12), (hx - ux * 0.2 + uy * 0.12, hy - uy * 0.2 - ux * 0.12)]
+    for col, w, g in (((0, 0, 0, 255), S * 0.13, 0.035), ((232, 200, 130, 255), S * 0.07, 0)):
+        d.line([tx * S + o, ty * S + o, (hx - ux * 0.1) * S + o, (hy - uy * 0.1) * S + o], fill=col, width=int(w))
+        pts = [((x + (x - hx) * 0 ) * S + o, y * S + o) for x, y in head]
+        if g:
+            cx = sum(p[0] for p in pts) / 3; cy = sum(p[1] for p in pts) / 3
+            pts = [(cx + (px - cx) * 1.35, cy + (py - cy) * 1.35) for px, py in pts]
+        d.polygon(pts, fill=col)
+    done(im, n, f'atlas-redbutton-{kind}' + ('' if state == 'up' else '-pressed') + '.png')
+
 def questpoi():
     n = 32; im = canvas(n); d = ImageDraw.Draw(im); S = n * K
     d.ellipse([S * 0.08, S * 0.08, S * 0.92, S * 0.92], fill=(20, 14, 4, 255))
@@ -58,4 +85,6 @@ def questblob():
     done(im, n, 'questblob.png')
 
 disc(); glow(); questpoi(); questblob()
+for kind in ('expand', 'condense'):
+    for state in ('up', 'pressed'): redarrow(kind, state)
 redx('up'); redx('pressed'); redx('highlight')

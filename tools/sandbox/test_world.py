@@ -185,6 +185,21 @@ for k in (1, 2, 3, 4):
     c = corners[k]; sx, sy, _ = ns2.Project(c[1], c[2], c[3])
     vo = dec._vo; worst = max(worst, abs(vo[k * 2 - 1] + off[k][0] - sx), abs(vo[k * 2] + off[k][1] - sy))
 check('arrow corners = projection of its ground corners', dec._shown and worst < 1e-6, f'{worst:.1e} px')
+# the arrow's size on screen: 32 px across (the 2D map's arrow) at every distance, zooming in and back out
+# (reported in the game 2026-10-21: it grew close up and stayed about three times the 2D arrow zoomed out)
+def arrow_px():  # the arrow's side, tip-left to tip-right corner (1 and 3), on screen
+    x1, y1 = dec._vo[1] - 0.5, dec._vo[2] + 0.5; x3, y3 = dec._vo[5] + 0.5, dec._vo[6] + 0.5
+    return math.hypot(x3 - x1, y3 - y1)
+saved_view = (cam.dist, ns2.IsTopDown())
+if not ns2.IsTopDown(): G.SlashCmdList.GPS3D('top')
+cam.dist = 200; tick(10)
+sizes = []
+for k in range(16): ns2.Zoom(0.85); tick(3); sizes.append((round(cam.dist), arrow_px()))
+for k in range(40): ns2.Zoom(1 / 0.85); tick(3); sizes.append((round(cam.dist), arrow_px()))
+bad = [s for s in sizes if s[0] < 14000 and abs(s[1] - 32) > 0.1]
+check('arrow 32 px across at every distance, zooming in and back out', not bad and dec._shown and min(s[0] for s in sizes) <= 30, f'{min(s[1] for s in sizes):.2f}-{max(s[1] for s in sizes):.2f} px from {min(s[0] for s in sizes)} to {max(s[0] for s in sizes)} yd; off: {bad[:3]}')
+if not saved_view[1]: G.SlashCmdList.GPS3D('top')
+cam.dist = saved_view[0]; tick(20)
 actor = [a for a in ns2.scene._actors.values() if a._model == 'unit:player'][0]
 check('character model at your position', abs(actor._pos[1] - pl.x) < 1e-9 and abs(actor._pos[2] - pl.y) < 1e-9 and abs(actor._pos[3] - pl.h) < 1e-9)
 # grab-pan
@@ -278,34 +293,37 @@ mouse('up', 160, 96, 'LeftButton'); tick(15)
 check('pan: altitude kept (orbit height and camera height unchanged after a drag)', cam.th == th0 and abs(eye()[2] - e0) < 1e-6, f'th {th0:.1f} -> {cam.th:.1f}, eye {e0:.1f} -> {eye()[2]:.1f}')
 cam.x, cam.y = V[0], V[1]; ns2.Render(); e0 = eye()[2]
 cam.x, cam.y = P[0], P[1]; ns2.Render()   # panned onto the mountain (a pan only moves x, y)
+floor_now = clearance()  # at once: never under the ground (the floor), the clearance follows within the ease
+tick(15)  # 0.5 s: the lift eases up to the clearance (2026-10-21; it used to jump there in one frame)
 ep = eye()[2]; cp = clearance()
-check('pan over a mountain: camera lifted only as far as needed', cam.th == th0 and ep > e0 and cp >= CLEAR - 1e-6 and ns2.Lift() > 0, f'peak {P[2]:.0f}, chosen eye {e0:.0f}, eye there {ep:.1f} ({cp:.1f} yd above the ground)')
-cam.x, cam.y = V[0], V[1]; ns2.Render()
+check('pan over a mountain: camera lifted only as far as needed (above the ground at once, the clearance within 0.5 s)', cam.th == th0 and ep > e0 and cp >= CLEAR - 0.5 and floor_now >= 2 - 1e-6 and ns2.Lift() > 0, f'peak {P[2]:.0f}, chosen eye {e0:.0f}, eye there {ep:.1f} ({cp:.1f} yd above the ground; {floor_now:.1f} in the first frame)')
+cam.x, cam.y = V[0], V[1]; ns2.Render(); tick(45)  # (eases back down within 1.5 s)
 check('...and back down to the chosen height after it', abs(eye()[2] - e0) < 1e-6, f'eye {eye()[2]:.1f} (chosen {e0:.1f})')
 # zooming in on the peak, at the centre and toward the cursor: stops above the ground
-cam.x, cam.y = P[0], P[1]; ns2.Render()
+cam.x, cam.y = P[0], P[1]; ns2.SnapLift(); ns2.Render()
 worst = 1e9; dists = []
 for k in range(40):
-    mouse('move', (k % 5 - 2) * 60, (k % 3 - 1) * 50); mouse('wheel', (k % 5 - 2) * 60, (k % 3 - 1) * 50, '', 1)
+    mouse('move', (k % 5 - 2) * 60, (k % 3 - 1) * 50); mouse('wheel', (k % 5 - 2) * 60, (k % 3 - 1) * 50, '', 1); tick(1)
     worst = min(worst, clearance()); dists.append(cam.dist)
 d_in = cam.dist
 for k in range(5): mouse('wheel', 0, 0, '', -1)
 check('zoom in on a peak stops at the ground (never inside it); zoom out works', worst >= CLEAR - 0.5 and cam.dist > d_in * 2, f'lowest {worst:.2f} yd above the ground over 40 zoom steps; dist {D:.0f} -> {d_in:.1f} -> {cam.dist:.1f}')
 # tilted, toward a slope
-ns2.SetTopDown(False, True); cam.pitch = 30; cam.x, cam.y, cam.th, cam.dist = P[0], P[1], P[2], 400; ns2.Render()
+ns2.SetTopDown(False, True); cam.pitch = 30; cam.x, cam.y, cam.th, cam.dist = P[0], P[1], P[2], 400; ns2.SnapLift(); ns2.Render()
 worst = 1e9
 for k in range(40):
-    mouse('move', 80, -120); mouse('wheel', 80, -120, '', 1); worst = min(worst, clearance())
+    mouse('move', 80, -120); mouse('wheel', 80, -120, '', 1); tick(1); worst = min(worst, clearance())
 check('tilted 30 deg, zooming toward a slope: never inside the ground', worst >= CLEAR - 0.5, f'lowest {worst:.2f} yd, dist now {cam.dist:.1f}')
 # a roof: Stormwind cathedral
 place(-8520, 850, 0, 0.0, 'Stormwind City', 'Cathedral Square'); tick(3)
 ns2.SetCamMode('free')
 R, S = scan(pl.x, pl.y, 90, 3)
-ns2.SetTopDown(True, True); cam.x, cam.y, cam.th, cam.dist = R[0], R[1], S[2], 300; ns2.Render()
+ns2.SetTopDown(True, True); cam.x, cam.y, cam.th, cam.dist = R[0], R[1], S[2], 300; ns2.SnapLift(); ns2.Render()
 worst = 1e9
 for k in range(40):
-    mouse('wheel', 0, 0, '', 1); worst = min(worst, clearance())
-check('zoom onto the cathedral roof stops above the roof', worst >= CLEAR - 0.5, f'roof {R[2]:.1f} (street {S[2]:.1f}); lowest {worst:.2f} yd above it, dist {cam.dist:.1f}')
+    mouse('wheel', 0, 0, '', 1); tick(1); worst = min(worst, clearance())
+tick(15); settled = clearance()  # (2026-10-21: while the wheel turns the camera may be up to 2 yd further in while its lift eases in)
+check('zoom onto the cathedral roof stops above the roof (at most 2.5 yd inside the clearance while zooming, at it 0.5 s after)', worst >= CLEAR - 2.5 and settled >= CLEAR - 0.5, f'roof {R[2]:.1f} (street {S[2]:.1f}); lowest {worst:.2f} yd above it, {settled:.2f} after, dist {cam.dist:.1f}')
 # tilted near the Redridge peaks: clear all round (25 yd), clear view ahead, no holes in front of the camera
 L.execute(r"""
 function SANDBOX_COVER(NX, NY, frac)
@@ -356,7 +374,7 @@ for (ox, oy) in ((0, 0), (300, 0), (-300, 0), (0, 300), (0, -300), (0, -400)):
     for yaw in (0, 90, 180, 270):
         for pitch, dist in ((30, 120), (45, 40), (30, 300), (60, 80)):
             cam.map = 0; cam.x, cam.y, cam.th, cam.yaw, cam.pitch, cam.dist = PK[0] + ox, PK[1] + oy, VL, yaw, pitch, dist
-            ns2.Render(); ns2.Render(); nviews += 1
+            ns2.SnapLift(); ns2.Render(); ns2.Render(); nviews += 1  # (put there: the lift as it is once eased)
             worst_disc = min(worst_disc, disc_clear())
             hx, hy, hz = ns2.ScreenToTerrain(0, 0); ex, ey, ez = eye()
             want = min(1.0, 1.2 * math.cos(math.radians(pitch)) ** 2) * dist  # the clear length the rule promises
@@ -366,8 +384,8 @@ check('tilted near peaks: the camera stays about 8 yd from any ground or roof (d
 check('tilted: the middle of the view is clear of hills for the promised length (1.2 x cos^2 tilt x zoom distance)', worst_ahead >= 0.6, f'nearest hit at {worst_ahead:.2f} x that length (checked every 6 yd, so a steep slope can poke in between)')
 check('no holes in the lower part of the view (triangles cut at the camera, not hidden)', miss_all == 0 and cut_all > 0, f'{miss_all} of {n_all} samples uncovered; {cut_all} cut triangles drawn')
 # straight down is not affected by the view-ahead rule: it still comes down to 8 yd over flat ground
-ns2.SetTopDown(True, True); cam.x, cam.y = PK[0], PK[1]; cam.th = ns2.GroundHeight(PK[0], PK[1]); cam.dist = 300; ns2.Render()
-for k in range(40): mouse('wheel', 0, 0, '', 1)
+ns2.SetTopDown(True, True); cam.x, cam.y = PK[0], PK[1]; cam.th = ns2.GroundHeight(PK[0], PK[1]); cam.dist = 300; ns2.SnapLift(); ns2.Render()
+for k in range(40): mouse('wheel', 0, 0, '', 1); tick(1)
 check('straight down: zoom still reaches the ground (view-ahead rule off)', clearance() < 30 and clearance() >= CLEAR - 0.5, f'{clearance():.1f} yd above the ground, dist {cam.dist:.1f}')
 ns2.SetTopDown(False, True)
 # following: still centred on you, still at your height
@@ -425,6 +443,64 @@ for k in range(5):
     place(-9464 + k * 0.3, 62, 0, 1.6, 'Elwynn Forest', 'Goldshire'); tick(1, 1 / 60)
     if abs(pl.y + (32 - (-9464 + k * 0.3) / TILE) * TILE) < 1e-6 and abs(cam.y - pl.y) < 1e-6: frames += 1
 check('following in 3D: your position and the view move every frame', frames == 5, f'{frames} of 5 frames')
+
+# The open sea (2026-10-21, Morten's NE Azshara screenshot): tiles of a continent with no land in their picture
+# are drawn in the background's colour, never with their minimap images (whose sea the game drew darker and
+# banded at about 100 px a tile, with a tan line along tiles 45-47 of row 20); tiles with land keep theirs.
+G.GPS3D_API.Show(None, {'map': 1, 'gx': 46.5, 'gy': 21.5}); tick(5)
+ns2.SetCamMode('free'); ns2.SetTopDown(True, True)
+cam.dist = 2500; ns2.Render(); tick(2)
+res = L.eval("""function()
+	local ns, GPS = SANDBOX.namespaces.GPS3D, GPS_API
+	local sea = GPS.colors.sea
+	-- open sea, worked out here: in the main land box, not in the planet's list of tiles with land
+	local land, m = {}, GPS.Maps[1]
+	for _, k in ipairs(ns.GlobeData.maps[1].tiles) do land[k] = true end
+	local function OpenSea(tx, ty) return tx >= m.fitMinX and tx <= m.fitMaxX and ty >= m.fitMinY and ty <= m.fitMaxY and not land[ty * 64 + tx] end
+	local byFile = {}
+	for key, id in pairs(GPS.Maps[1].tiles) do byFile[id] = key end
+	local minimap, seaMinimap, flatSea, other = 0, 0, 0, 0
+	for _, f in ipairs(ns.bucketFrames) do
+		for _, r in ipairs({ f:GetRegions() }) do
+			if r:IsShown() then
+				local file = r:GetTexture()
+				local key = byFile[file]
+				if key then
+					minimap = minimap + 1
+					if OpenSea(key % 64, key // 64) then seaMinimap = seaMinimap + 1 end
+				else
+					local cr, cg, cb = r:GetVertexColor()
+					if type(file) == "string" and file:lower():find("white8x8") and cr == sea[1] and cg == sea[2] and cb == sea[3] then flatSea = flatSea + 1 else other = other + 1 end
+				end
+			end
+		end
+	end
+	local open, all = 0, 0
+	for key in pairs(ns.World[1]) do all = all + 1; if OpenSea(key % 64, key // 64) then open = open + 1 end end
+	return minimap, seaMinimap, flatSea, other, open, all, OpenSea(46, 20), OpenSea(47, 23), OpenSea(1, 1)
+end""")()
+check('open sea NE of Azshara drawn in the background\'s colour (no minimap image on an open-sea tile), land tiles with their minimap images',
+      res[1] == 0 and res[2] > 0 and res[0] > 0 and res[6] and not res[7] and not res[8],
+      f'shown: {res[0]} minimap triangles ({res[1]} on open-sea tiles), {res[2]} flat #081110, {res[3]} other; Kalimdor: {res[4]} of {res[5]} tiles open sea')
+# The overview images' sea (scripts/fill_overview_sea.py): one tone, no line at the world's edge; the planet's page
+# (scripts/build_globe.py) without the line either.
+import numpy as np
+from PIL import Image
+from scipy import ndimage
+OV = os.path.join(SITE, '..', '..', '..', 'Interface', 'AddOns', 'GnomishPositioningSystem', 'Overview')
+dark_px, worst_line = 0, 0  # (darker-tone pixels: the most in one image; a few are JPEG noise, as the script counts them)
+for f in sorted(os.listdir(OV)):
+    a = np.asarray(Image.open(os.path.join(OV, f)).convert('RGB')).astype(int)
+    tone = (np.abs(a[..., 0] - 8) <= 2) & (np.abs(a[..., 2] - 16) <= 2) & (a[..., 1] >= 11) & (a[..., 1] <= 19)
+    inner = ndimage.binary_erosion(tone, structure=np.ones((17, 17), bool))
+    dark_px = max(dark_px, int((inner & (np.abs(a - [8, 13, 16]).max(-1) <= 1)).sum()))
+    if f == '1_2_1.jpg':  # tiles 45-47 of row 20: their north side, and the east side of 47 (x0 32, y0 16, 64 px a tile)
+        band = np.concatenate([a[4 * 64:4 * 64 + 6, 13 * 64:16 * 64].reshape(-1, 3), a[4 * 64:5 * 64, 16 * 64 - 6:16 * 64].reshape(-1, 3)])
+        worst_line = int(np.abs(band - [8, 17, 16]).max())
+page = np.asarray(Image.open(os.path.join(SITE, 'globe', 'land_1_1_0.png')))
+page_line = int(page[20 * 16:21 * 16, 13 * 16:16 * 16, 3].max())  # the same tiles on the planet's page (alpha)
+check('overview images: the open sea in one tone (no darker #080d10 triangles) and no line at the world\'s edge NE of Azshara; the planet\'s page there transparent',
+      dark_px < 50 and worst_line <= 2 and page_line == 0, f'at most {dark_px} darker-tone pixels in the open sea of an image, line {worst_line} levels off #081110, page alpha {page_line}')
 
 G.SlashCmdList.GPS3D('test'); tick(80); chat()
 print(f'\n{sum(r[1] for r in results)} of {len(results)} checks passed')

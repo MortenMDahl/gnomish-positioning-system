@@ -11,7 +11,7 @@ L.execute(open(f'{SITE}/engine.lua').read())
 L.execute(open(f'{SITE}/zones.lua').read())  # every zone of the two continents (make_zones.py)
 toc = open(os.path.join(HERE, '..', '..', 'prototypes', 'GPS3D', 'GPS3D.toc')).read()
 gps3d_files = [l.strip().replace('\\', '/') for l in toc.splitlines() if l.strip() and not l.startswith('##')]
-for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'World.lua', 'MapWindow.lua']), ('GPS3D', gps3d_files)]:
+for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'World.lua', 'MapWindow.lua', 'MapKey.lua']), ('GPS3D', gps3d_files)]:
     for f in files:
         if not G.SANDBOX_LOAD(addon, f, open(f'{SITE}/addons/{addon}/{f}').read()): print('LOAD FAILED', addon, f)
     G.SANDBOX_LOADED(addon)
@@ -66,13 +66,13 @@ G.GameTooltip_Hide()
 
 def layout_ok(frame, ui, name):
     fr = rect(frame); rs = [rect(b) for b in lua_list(ui.rings)]
-    zs = [rect(ui.zoomIn), rect(ui.zoomOut), rect(ui.close)]
+    zs = [rect(ui.zoomIn), rect(ui.zoomOut), rect(ui.close), rect(ui.fullScreen), rect(ui.globe)]  # (the globe and full screen since 2026-10-21)
     ok_in = all(inside(r, fr) for r in rs + zs)
-    ok_sep = not any(overlap(rs[i], rs[j]) for i in range(len(rs)) for j in range(i + 1, len(rs)))
+    ok_sep = not any(overlap(a[i], a[j]) for a in (rs, zs) for i in range(len(a)) for j in range(i + 1, len(a)))
     ok_zoom = not any(overlap(r, z) for r in rs for z in zs)
     ft = rect(ui.footer)
     ok_footer = not overlap(ft, rect(ui.zoomOut))
-    check(f'{name}: rings, close and zoom inside the window, none overlapping', ok_in and ok_sep and ok_zoom and ok_footer, f'in {ok_in} apart {ok_sep} clear of zoom/close {ok_zoom} footer clear {ok_footer}')
+    check(f'{name}: rings, close, full screen, globe and zoom inside the window, none overlapping', ok_in and ok_sep and ok_zoom and ok_footer, f'in {ok_in} apart {ok_sep} clear of zoom/close {ok_zoom} footer clear {ok_footer}')
 
 layout_ok(F1, u1, '2D at 900x650')
 F1.SetSize(F1, 400, 300); tick(2)
@@ -202,6 +202,18 @@ for b in [ns1.ui.compass if hasattr(ns1, 'ui') and ns1.ui else None] + rings2:
     worst_ring = max(worst_ring, math.hypot(dx, dy)); det.append(f'({dx:+.2f},{dy:+.2f})')
 check(f'every ring\'s contents sit on the gold ring\'s centre (art centre {_cx:.2f}, {_cy:.2f} texels; within 0.1 px)', worst_ring <= 0.1 and len(det) >= 5,
       f'worst {worst_ring:.3f} px; disc minus ring per ring: ' + ' '.join(det))
+# a ring's label: shrunk to fit the hole by a smaller font (not SetTextScale, which in the game left the
+# shrunk "2D" about 1 px left of the ring's centre, 2026-10-21), its centre on the disc's centre
+lab_det, lab_ok = [], True
+for txt in ('2D', '3D', '90°', 'Behind'):
+    b = u2.modeSwitch; b.SetLabel(b, txt); tick(1)
+    fs = b.label; fl, fb, fr, ft = rect(fs); dl, db, dr, dt = rect(b.disc)
+    w = fs.GetStringWidth(fs); off = abs((fl + fr) / 2 - (dl + dr) / 2)
+    scaled = fs.GetTextScale(fs)
+    lab_ok = lab_ok and w <= b.GetWidth(b) * 0.4 + 1e-6 and off < 1e-6 and scaled == 1
+    lab_det.append(f'{txt}: {w:.1f} px, off {off:.2f}, text scale {scaled}')
+u2.modeSwitch.SetLabel(u2.modeSwitch, '3D'); tick(1)
+check('ring labels fit the hole by font size and sit on its centre', lab_ok, '; '.join(lab_det))
 click(ns2.topButton); tick(20)
 layout_ok(F2, u2, '3D at 900x650')
 F2.SetSize(F2, 400, 300); tick(3)

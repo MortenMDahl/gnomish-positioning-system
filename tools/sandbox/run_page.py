@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITE = os.path.join(HERE, 'site')
 OUT = os.path.join(HERE, 'shots'); os.makedirs(OUT, exist_ok=True)
-PORT = 8765
+PORT = int(os.environ.get('SANDBOX_PORT', '8765'))  # another port when several sandboxes run at once
 
 def wrap():
     body = open(os.path.join(SITE, 'index.html')).read()

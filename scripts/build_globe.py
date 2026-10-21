@@ -13,7 +13,8 @@
 #   tools/sandbox/site/globe/*.png  copies for the sandbox.
 # Sources: the overview images (Interface/AddOns/GnomishPositioningSystem/Overview, 64 px per tile), the
 # map table (Data/MapTiles.lua: atlases and each continent's main-land box) and GPS3D's height data.
-# Usage: python scripts/build_globe.py   (--art: only the planet's own art)
+# Usage: python scripts/build_globe.py   (--art: only the planet's own art; --land: only the land pages and
+#        Data/Globe.lua, after the overview images changed, e.g. by scripts/fill_overview_sea.py)
 import math, os, re, struct
 import sys
 import numpy as np
@@ -390,6 +391,9 @@ def main():
         lines.append('\t},')
     lines.append('} }')
     open(os.path.join(G3, 'Data', 'Globe.lua'), 'w', newline='\n').write('\n'.join(lines) + '\n')
+    if '--land' in sys.argv:
+        print('wrote the land pages and Data/Globe.lua')
+        return
     planet_art()
     print('wrote', OUT)
 

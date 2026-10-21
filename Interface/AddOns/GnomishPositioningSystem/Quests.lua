@@ -9,8 +9,9 @@
 -- quest-area frame (QuestPOIFrame, the frame Blizzard's map uses) set to the quest's zone and laid
 -- exactly over that zone's rectangle on the 2D map: a zone's map coordinates and GPS's 2D map are
 -- both straight-line projections of the world, so the area lands where Blizzard draws it.
--- The 3D view draws the same markers (GPS3D, through GPS_API); its areas wait on the in-game check
--- (/gps test, "quests:" lines, TESTING.md).
+-- The 3D view draws the same markers (GPS3D, through GPS_API) and the same areas, whose shape is
+-- learned here from the quest-area frame's hit-test (Q.AreaShapes, below) and drawn on the ground
+-- by GPS3D's QuestAreas.lua.
 local addonName, ns = ...
 
 local Q = {}
@@ -152,13 +153,17 @@ local function PinEnter(self)
 	end
 	GameTooltip:AddLine(self.gpsTracked and "Click: stop tracking" or "Click: track this quest", 0.5, 0.5, 0.5)
 	GameTooltip:Show()
-	Q.hovered = id
+	Q.hovered, self.gpsHoverID = id, id
 	if POIButtonHighlightManager and POIButtonHighlightManager.SetHighlight then POIButtonHighlightManager:SetHighlight(id) end
 	Q.Changed(true)
 end
 local function PinLeave(self)
 	if GameTooltip:GetOwner() == self then GameTooltip:Hide() end
-	if Q.hovered == self.gpsQuestID then
+	-- the quest hovered when the mouse came in: a click in between re-sorts the list, and this button
+	-- may show another quest by now (the hovered area then stayed drawn, until 2026-10-21)
+	local id = self.gpsHoverID
+	self.gpsHoverID = nil
+	if id and Q.hovered == id then
 		Q.hovered = nil
 		if POIButtonHighlightManager and POIButtonHighlightManager.ClearHighlight then POIButtonHighlightManager:ClearHighlight() end
 		Q.Changed(true)
@@ -313,6 +318,391 @@ events:SetScript("OnEvent", function(_, event, name)
 end)
 
 ------------------------------------------------------------------------------------------------
+-- Objective areas for the 3D view: the area's shape, learned from the game's quest-area frame.
+--
+-- What an addon can learn about an area (Forever's UI source, build 1.60.1.70425): no function returns
+-- its outline (C_QuestLog has GetQuestsOnMap, GetNextWaypoint..., C_QuestPOI does not exist, and the
+-- old QuestPOIGetIconInfo / blob-point calls are gone); the QuestPOIFrame widget only draws it
+-- (FrameAPIBlob: SetMapID, DrawBlob, DrawNone, ...) and hit-tests it (FrameAPIQuestPOI:
+-- UpdateMouseOverTooltip(x, y) -> questID, numObjectives, with x and y from 0 to 1 over the frame's
+-- map; Blizzard's QuestBlobPinMixin:UpdateTooltip passes the map canvas's normalised cursor
+-- position). So the shape is found by asking that hit-test which quest's area lies under points of a
+-- grid: a frame of our own (never the 2D map's) set to the quest's zone with only that quest drawn.
+-- The source cannot say whether the hit-test answers while the frame is not drawn, so three ways are
+-- tried in turn until one finds an area, and the one that did is kept for the session: the frame
+-- hidden; shown at alpha 0; shown behind the 3D view's ground (inside its window, under its opaque
+-- background). A way that finds nothing for this quest is not proof (some quests have no area), so a
+-- quest is only "without area" once every way has found nothing.
+-- Search: 32 x 32 points over 2,000 yd round the quest's point (and the point itself), widened while
+-- the area reaches the window's edge, the whole zone (48 x 48) if nothing is found; then a grid of at
+-- most 24 cells (at least 6 yd) across the box round the hits plus one coarse cell, and each grid edge
+-- whose ends differ bisected 3 times. Marching squares turns that into pieces of at most 4 corners (the
+-- fill) and closed outlines (the border), in GPS grid coordinates. At most 400 hit-tests and 2 ms per
+-- frame; redone after the quest log changes (the old shape stays drawn until the new one is ready).
+------------------------------------------------------------------------------------------------
+local AREA_REACH, AREA_COARSE, AREA_WHOLE, AREA_FINE, AREA_MIN_CELL, AREA_BISECT = 1000, 32, 48, 24, 6, 3
+local AREA_CALLS, AREA_MS = 400, 2
+local TILE_YD = 1600 / 3
+local WAYS = { "hidden", "invisible", "behind" }
+local WAY_TEXT = { hidden = "frame hidden", invisible = "frame shown at alpha 0", behind = "frame shown behind the 3D view's ground" }
+local areaShapes, areaJobs, areaOut = {}, {}, {}
+Q.areaShapes, Q.areaJobs, Q.WAY_TEXT = areaShapes, areaJobs, WAY_TEXT
+Q.area = { way = nil, broken = nil, last = nil } -- the way that works, why none can, the last result (for /gps3d test)
+
+-- The window that hides the "behind" way's frame (GPS3D's): frame level and size from it.
+function Q.SetAreaHost(host, canvas) Q.areaHost, Q.areaHostCanvas = host, canvas end
+
+-- Our own quest-area frame, set up for one way, zone and quest; nil (and Q.area.broken) when the game
+-- has none or it has no hit-test.
+local function Sampler(way, zone, questID)
+	local f = Q.sampler
+	if f == nil then
+		local ok, made = pcall(CreateFrame, "QuestPOIFrame", nil, UIParent)
+		if not (ok and made and made.DrawBlob and made.SetMapID) then
+			Q.area.broken = "the game's quest-area frame (QuestPOIFrame) cannot be made here (" .. tostring(made) .. ")"
+		elseif not made.UpdateMouseOverTooltip then
+			Q.area.broken = "the quest-area frame has no hit-test (UpdateMouseOverTooltip)"
+			made:Hide()
+		else
+			made:SetFillTexture(BLOB_FILL)
+			made:SetBorderTexture(BLOB_BORDER)
+			made:EnableMouse(false)
+			f = made
+		end
+		Q.sampler = f or false
+		if not f then ns.Log("QUEST", "3D areas: %s", Q.area.broken) return nil end
+	end
+	if not f then return nil end
+	local host = way == "behind" and Q.areaHost
+	local parent = host or UIParent
+	if f:GetParent() ~= parent then f:SetParent(parent) end
+	local r = ZoneRect(zone)
+	local w, h = math.abs(r[3] - r[1]), math.abs(r[4] - r[2])
+	local size = 512
+	if host then
+		local cw, ch = Q.areaHostCanvas:GetSize()
+		size = math.max(16, math.min(size, (cw or 0) - 8, (ch or 0) - 8))
+	end
+	local k = size / math.max(w, h, 1e-6)
+	f:ClearAllPoints()
+	f:SetSize(math.max(1, w * k), math.max(1, h * k))
+	f:SetPoint("CENTER", host and Q.areaHostCanvas or UIParent, "CENTER")
+	if host then f:SetFrameStrata(host:GetFrameStrata()); f:SetFrameLevel(host:GetFrameLevel()) else f:SetFrameStrata("BACKGROUND") end
+	f:SetAlpha(way == "behind" and 1 or 0)
+	f:SetMapID(zone)
+	f:DrawNone()
+	f:DrawBlob(questID, true)
+	if way == "hidden" then f:Hide() else f:Show() end
+	return f
+end
+
+local function NextWay(job)
+	local i = job.wayIndex + 1
+	if Q.area.way then return nil end -- a known way found nothing: this quest has no area
+	while WAYS[i] == "behind" and not Q.areaHost do i = i + 1 end
+	return WAYS[i] and i or nil
+end
+
+-- Edge ids of a grid of nx x ny cells: across (i, j)-(i+1, j), then down (i, j)-(i, j+1).
+local function EdgeH(job, i, j) return j * job.nx + i + 1 end
+local function EdgeV(job, i, j) return job.nx * (job.ny + 1) + j * (job.nx + 1) + i + 1 end
+
+-- Marching squares: pieces (p1..p4, a triangle repeats its last corner) and closed outlines (lv, from
+-- ls[k] to le[k]), corners in GPS grid coordinates (gx, gy).
+local function BuildShape(job)
+	local nx, ny, inside, cross, r = job.nx, job.ny, job.inside, job.cross, job.rect
+	local s = { questID = job.questID, zone = job.zone, map = job.map, stamp = job.stamp, way = WAYS[job.wayIndex],
+		cell = job.cell, nx = nx, ny = ny, calls = job.n, frames = job.frames, ms = job.ms,
+		gx = {}, gy = {}, p1 = {}, p2 = {}, p3 = {}, p4 = {}, lv = {}, ls = {}, le = {}, np = 0, nv = 0, inside = 0 }
+	local gridV, edgeV = {}, {}
+	local W, Hh = r[3] - r[1], r[4] - r[2]
+	local function Corner(i, j)
+		local k = j * (nx + 1) + i
+		local v = gridV[k]
+		if not v then
+			s.nv = s.nv + 1; v = s.nv
+			s.gx[v], s.gy[v] = r[1] + (job.fu0 + i * job.du) * W, r[2] + (job.fv0 + j * job.dv) * Hh
+			gridV[k] = v
+		end
+		return v
+	end
+	local function EdgePoint(e, i0, j0, i1, j1)
+		local v = edgeV[e]
+		if not v then
+			local t = cross[e]
+			s.nv = s.nv + 1; v = s.nv
+			local u0, v0 = job.fu0 + i0 * job.du, job.fv0 + j0 * job.dv
+			local u1, v1 = job.fu0 + i1 * job.du, job.fv0 + j1 * job.dv
+			s.gx[v], s.gy[v] = r[1] + (u0 + (u1 - u0) * t) * W, r[2] + (v0 + (v1 - v0) * t) * Hh
+			edgeV[e] = v
+		end
+		return v
+	end
+	local function Add(a, b, c, d)
+		s.np = s.np + 1
+		s.p1[s.np], s.p2[s.np], s.p3[s.np], s.p4[s.np] = a, b, c, d
+	end
+	local nextOf, order = {}, {}
+	local poly, isEdge, ci, cj = {}, {}, { 0, 1, 1, 0 }, { 0, 0, 1, 1 }
+	local function Emit(n)
+		-- outline: consecutive edge points of the piece are where the edge passes through the cell
+		for m = 1, n do
+			local a, b = poly[m], poly[m % n + 1]
+			if isEdge[a] and isEdge[b] then nextOf[a] = b; order[#order + 1] = a end
+		end
+		if n == 3 then Add(poly[1], poly[2], poly[3], poly[3])
+		elseif n == 4 then Add(poly[1], poly[2], poly[3], poly[4])
+		elseif n == 5 then Add(poly[1], poly[2], poly[3], poly[4]); Add(poly[1], poly[4], poly[5], poly[5]) end
+	end
+	for j = 0, ny - 1 do
+		for i = 0, nx - 1 do
+			local c1, c2 = inside[j * (nx + 1) + i], inside[j * (nx + 1) + i + 1]
+			local c3, c4 = inside[(j + 1) * (nx + 1) + i + 1], inside[(j + 1) * (nx + 1) + i]
+			local ins = c1 + c2 + c3 + c4
+			if ins > 0 then
+				local inn = { c1, c2, c3, c4 }
+				local e = { EdgeH(job, i, j), EdgeV(job, i + 1, j), EdgeH(job, i, j + 1), EdgeV(job, i, j) }
+				local ends = { { i, j, i + 1, j }, { i + 1, j, i + 1, j + 1 }, { i, j + 1, i + 1, j + 1 }, { i, j, i, j + 1 } }
+				local function EP(m) local q = ends[m]; local v = EdgePoint(e[m], q[1], q[2], q[3], q[4]); isEdge[v] = true; return v end
+				if ins == 2 and c1 == c3 then
+					-- a saddle: two corners across from each other, taken as two separate pieces
+					for m = 1, 4 do
+						if inn[m] == 1 then
+							poly[1], poly[2], poly[3] = EP((m + 2) % 4 + 1), Corner(i + ci[m], j + cj[m]), EP(m)
+							Emit(3)
+						end
+					end
+				else
+					local n = 0
+					for m = 1, 4 do
+						if inn[m] == 1 then n = n + 1; poly[n] = Corner(i + ci[m], j + cj[m]) end
+						if inn[m] ~= inn[m % 4 + 1] then n = n + 1; poly[n] = EP(m) end
+					end
+					Emit(n)
+				end
+				s.inside = s.inside + (ins == 4 and 1 or 0)
+			end
+		end
+	end
+	-- chain the outline's pieces into closed loops
+	local done = {}
+	for _, a in ipairs(order) do
+		if not done[a] then
+			s.ls[#s.ls + 1] = #s.lv + 1
+			local v = a
+			while v and not done[v] do done[v] = true; s.lv[#s.lv + 1] = v; v = nextOf[v] end
+			s.le[#s.le + 1] = #s.lv
+		end
+	end
+	s.x0, s.x1, s.y0, s.y1 = math.huge, -math.huge, math.huge, -math.huge
+	for v = 1, s.nv do
+		s.x0, s.x1 = math.min(s.x0, s.gx[v]), math.max(s.x1, s.gx[v])
+		s.y0, s.y1 = math.min(s.y0, s.gy[v]), math.max(s.y1, s.gy[v])
+	end
+	return s
+end
+Q.BuildShape = BuildShape
+
+local function Finish(job, shape, why)
+	table.remove(areaJobs, 1)
+	if Q.sampler then Q.sampler:DrawNone(); Q.sampler:Hide() end
+	if shape then
+		if not Q.area.way then Q.area.way = shape.way end
+		areaShapes[job.key] = shape
+		Q.area.last = ("quest %d in zone %d: %s; %d pieces, %d outline(s), cells of %.1f yd; %d hit-tests in %.1f ms over %d frames"):format(
+			job.questID, job.zone, WAY_TEXT[shape.way], shape.np, #shape.ls, shape.cell, job.n, job.ms, job.frames)
+	else
+		areaShapes[job.key] = { none = true, stamp = job.stamp }
+		Q.area.last = ("quest %d in zone %d: no area found (%s); %d hit-tests in %.1f ms over %d frames"):format(job.questID, job.zone, tostring(why), job.n, job.ms, job.frames)
+	end
+	ns.Log("QUEST", "3D area of %s", Q.area.last)
+	Q.Changed(true)
+end
+
+-- The coarse search's window: job.reach yards round the quest's point, within the zone.
+local function CoarseWindow(job)
+	local hu, hv = job.reach / job.wyd, job.reach / job.hyd
+	job.cu0, job.cu1 = math.max(0, job.x - hu), math.min(1, job.x + hu)
+	job.cv0, job.cv1 = math.max(0, job.y - hv), math.min(1, job.y + hv)
+	job.i0, job.i1, job.j0, job.j1 = math.huge, -math.huge, math.huge, -math.huge
+	job.k = -1
+end
+
+local function Hit(job, u, v)
+	job.n = job.n + 1
+	return Q.sampler:UpdateMouseOverTooltip(u, v) == job.questID
+end
+
+-- The coarse search is through: a wider window, the whole zone, the next way, nothing, or the fine
+-- grid over the box round the hits (one coarse cell more each side). True: this frame's share is over.
+local function CoarseDone(job)
+	local n = job.cn
+	local whole = job.cu0 <= 0 and job.cu1 >= 1 and job.cv0 <= 0 and job.cv1 >= 1
+	local hits = job.i0 <= job.i1
+	local su, sv = (job.cu1 - job.cu0) / n, (job.cv1 - job.cv0) / n
+	if hits and not whole and ((job.i0 == 0 and job.cu0 > 0) or (job.i1 == n - 1 and job.cu1 < 1) or (job.j0 == 0 and job.cv0 > 0) or (job.j1 == n - 1 and job.cv1 < 1)) then
+		job.reach = job.reach * 2 -- the area reaches the window's edge
+		CoarseWindow(job)
+		return false
+	end
+	if not (hits or job.mhit) then
+		if not whole then
+			job.reach, job.cn = 1e9, AREA_WHOLE
+			CoarseWindow(job)
+			return false
+		end
+		local i = NextWay(job)
+		if not i then
+			Finish(job, nil, Q.area.way and ("asked with the " .. WAY_TEXT[Q.area.way]) or "asked with the frame hidden, at alpha 0 and behind the 3D view")
+		else
+			job.wayIndex, job.phase = i, "set"
+		end
+		return true
+	end
+	local u0, u1, v0, v1 = job.x - su, job.x + su, job.y - sv, job.y + sv -- round the quest's point, if that is all
+	if hits then
+		local a0, a1 = job.cu0 + (job.i0 - 1) * su, job.cu0 + (job.i1 + 2) * su
+		local b0, b1 = job.cv0 + (job.j0 - 1) * sv, job.cv0 + (job.j1 + 2) * sv
+		if job.mhit then u0, u1, v0, v1 = math.min(u0, a0), math.max(u1, a1), math.min(v0, b0), math.max(v1, b1)
+		else u0, u1, v0, v1 = a0, a1, b0, b1 end
+	end
+	u0, u1, v0, v1 = math.max(0, u0), math.min(1, u1), math.max(0, v0), math.min(1, v1)
+	local fw, fh = (u1 - u0) * job.wyd, (v1 - v0) * job.hyd
+	local cell = math.max(AREA_MIN_CELL, math.max(fw, fh) / AREA_FINE)
+	job.nx, job.ny = math.max(2, math.ceil(fw / cell)), math.max(2, math.ceil(fh / cell))
+	job.fu0, job.fv0, job.du, job.dv = u0, v0, (u1 - u0) / job.nx, (v1 - v0) / job.ny
+	job.cell = math.max(job.du * job.wyd, job.dv * job.hyd)
+	job.inside, job.cross, job.phase, job.k = {}, {}, "fine", 0
+	return false
+end
+
+-- One frame's share of a job. Phases: set (draw the quest on the sampler, then wait 2 frames so it
+-- has been drawn once), coarse (find the area), fine (the grid's corners), edges (where the edge
+-- crosses each grid edge), then the shape is built.
+local function Step(job, t0)
+	if job.phase == "set" then
+		if not Sampler(WAYS[job.wayIndex], job.zone, job.questID) then return Finish(job, nil, Q.area.broken) end
+		job.phase, job.wait = "wait", 2
+		job.reach, job.cn = AREA_REACH, AREA_COARSE
+		CoarseWindow(job)
+		return
+	elseif job.phase == "wait" then
+		job.wait = job.wait - 1
+		if job.wait <= 0 then job.phase = "coarse" end
+		return
+	end
+	local start = job.n
+	while job.n - start < AREA_CALLS and debugprofilestop() - t0 < AREA_MS do
+		if job.phase == "coarse" then
+			local n, k = job.cn, job.k
+			if k < 0 then
+				job.mhit = Hit(job, job.x, job.y) -- the quest's own point first: a small area round it is not missed
+			elseif k < n * n then
+				local i, j = k % n, math.floor(k / n)
+				if Hit(job, job.cu0 + (i + 0.5) * (job.cu1 - job.cu0) / n, job.cv0 + (j + 0.5) * (job.cv1 - job.cv0) / n) then
+					job.i0, job.i1 = math.min(job.i0, i), math.max(job.i1, i)
+					job.j0, job.j1 = math.min(job.j0, j), math.max(job.j1, j)
+				end
+			elseif CoarseDone(job) then
+				break
+			end
+			if job.phase == "coarse" and k == job.k then job.k = k + 1 end
+		elseif job.phase == "fine" then
+			local nx, k = job.nx, job.k
+			if k < (nx + 1) * (job.ny + 1) then
+				local i, j = k % (nx + 1), math.floor(k / (nx + 1))
+				-- the grid's border counts as outside, so every outline closes
+				job.inside[k] = (i > 0 and j > 0 and i < nx and j < job.ny and Hit(job, job.fu0 + i * job.du, job.fv0 + j * job.dv)) and 1 or 0
+				job.k = k + 1
+			else
+				job.phase, job.k = "edges", 1
+			end
+		else -- edges
+			local nx, ny, e = job.nx, job.ny, job.k
+			local nh = nx * (ny + 1)
+			if e > nh + ny * (nx + 1) then
+				job.ms, job.frames = job.ms + debugprofilestop() - t0, job.frames + 1
+				return Finish(job, BuildShape(job))
+			end
+			local i0, j0, i1, j1
+			if e <= nh then
+				i0, j0 = (e - 1) % nx, math.floor((e - 1) / nx); i1, j1 = i0 + 1, j0
+			else
+				local q = e - nh - 1
+				i0, j0 = q % (nx + 1), math.floor(q / (nx + 1)); i1, j1 = i0, j0 + 1
+			end
+			local a = job.inside[j0 * (nx + 1) + i0]
+			if a ~= job.inside[j1 * (nx + 1) + i1] then
+				-- bisected between the inside end and the outside end; t is measured from the first end
+				local lo, hi = a == 1 and 0 or 1, a == 1 and 1 or 0
+				local u0, v0 = job.fu0 + i0 * job.du, job.fv0 + j0 * job.dv
+				local du, dv = (i1 - i0) * job.du, (j1 - j0) * job.dv
+				for _ = 1, AREA_BISECT do
+					local m = (lo + hi) / 2
+					if Hit(job, u0 + du * m, v0 + dv * m) then lo = m else hi = m end
+				end
+				job.cross[e] = (lo + hi) / 2
+			end
+			job.k = e + 1
+		end
+	end
+	job.ms, job.frames = job.ms + debugprofilestop() - t0, job.frames + 1
+end
+
+local areaDriver = CreateFrame("Frame")
+local function RunJobs()
+	local job = areaJobs[1]
+	if not job then areaDriver:SetScript("OnUpdate", nil) return end
+	if Q.areaHost and not Q.areaHost:IsShown() then return end -- the 3D view closed: wait (its "behind" way needs it shown)
+	local t0 = debugprofilestop()
+	local ok, err = pcall(Step, job, t0)
+	if not ok then
+		Q.area.broken = "the hit-test failed: " .. tostring(err)
+		if areaJobs[1] == job then Finish(job, nil, Q.area.broken) end
+	end
+end
+
+local function Queue(q, key, instance)
+	for _, job in ipairs(areaJobs) do if job.key == key then return end end
+	local r = ZoneRect(q.zone)
+	if not r then return end
+	local job = { key = key, questID = q.questID, zone = q.zone, map = instance, x = q.x, y = q.y, stamp = cache.stamp, rect = r,
+		wyd = math.max(1, math.abs(r[3] - r[1]) * TILE_YD), hyd = math.max(1, math.abs(r[4] - r[2]) * TILE_YD),
+		wayIndex = 1, phase = "set", n = 0, frames = 0, ms = 0 }
+	for i, way in ipairs(WAYS) do if way == Q.area.way then job.wayIndex = i end end
+	areaJobs[#areaJobs + 1] = job
+	areaDriver:SetScript("OnUpdate", RunJobs)
+end
+
+-- The shapes to draw in the 3D view of a GPS map: the tracked quest's and the hovered marker's areas
+-- that are ready (a reused list: called every frame the view is drawn). Starts finding the ones not
+-- known yet, or known from before the quest log last changed.
+function Q.AreaShapes(instance)
+	local n = 0
+	if instance and Q.Enabled() and not Q.area.broken then
+		for _, q in ipairs(Q.List(instance)) do
+			if q.tracked or q.questID == Q.hovered then
+				local key = q.questID * 100000 + q.zone
+				local s = areaShapes[key]
+				if not s or s.stamp ~= cache.stamp then Queue(q, key, instance) end
+				if s and not s.none then n = n + 1; areaOut[n] = s end
+			end
+		end
+	end
+	for i = n + 1, #areaOut do areaOut[i] = nil end
+	return areaOut
+end
+
+-- For /gps3d test: how the 3D view gets its areas, or why it cannot.
+function Q.AreaStatus()
+	if Q.area.broken then return "none: " .. Q.area.broken end
+	if not Q.Enabled() then return "off (the Quests setting, Blizzard's quest objectives option, or the quest API)" end
+	return ("from the quest-area frame's hit-test (UpdateMouseOverTooltip), %s; last: %s"):format(
+		Q.area.way and WAY_TEXT[Q.area.way] or "way not known yet (no area found with the frame hidden, at alpha 0 or behind the 3D view)",
+		Q.area.last or "none asked yet (track a quest with an area on this map)")
+end
+
+------------------------------------------------------------------------------------------------
 -- In-game check (/gps test, "quests:" lines): what only the game can answer (TESTING.md)
 ------------------------------------------------------------------------------------------------
 function Q.SelfTest(Report)
@@ -377,3 +767,6 @@ GPS_API.QuestList = function(instance) return Q.List(instance) end
 GPS_API.QuestStamp = function() return cache.stamp end
 GPS_API.NewQuestPin = function(parent) return Q.NewPin(parent) end
 GPS_API.SetupQuestPin = function(pin, q) Q.SetupPin(pin, q) end
+GPS_API.QuestAreas = function(instance) return Q.AreaShapes(instance) end
+GPS_API.QuestAreaStatus = function() return Q.AreaStatus() end
+GPS_API.SetQuestAreaHost = function(host, canvas) Q.SetAreaHost(host, canvas) end
