@@ -18,6 +18,11 @@
 -- buildings replace the simplified blocks inside Model distance (ns.ModelsCover), and if none has
 -- loaded within WMO_WAIT seconds the simplified shapes stay (said once in chat and in the debug log).
 -- The result is saved per build (GPS3D_DB.wmoCheck); /gps3d models wmo checks again.
+-- Since 2026-10-21 the game's buildings are not the default (Buildings close up: simplified shapes): the
+-- first time the 3D view opened in the game (Forever 1.60.1.70532, the Valley of Trials), the client
+-- crashed (ACCESS_VIOLATION reading address 0x10, no Lua running) right where this check hands the game
+-- its first WMO, the only model the 3D view gives the game when it opens with the defaults. A crash
+-- cannot be caught from Lua, so the check only runs once someone picks the game's buildings.
 --
 -- Caves and mines (kind 2 in the data: WMOs whose rooms and rock shell lie in the ground, see
 -- scripts/browser_underground.js) are buildings like the others when the game draws WMOs (since
@@ -42,7 +47,7 @@ local UNDRAWN_REACH = 3500 -- buildings not drawn are listed this far round the 
 local OFF = 131072
 local WMO_PROBE, M2_PROBE = 106965, 189927 -- the Elwynn farmhouse (a building), an Elwynn tree
 
-ns.modelDefaults = { buildingModels = "game", props = false, caves = true, modelCount = 250, modelRange = 600, modelPx = 6 }
+ns.modelDefaults = { buildingModels = "simple", props = false, caves = true, modelCount = 250, modelRange = 600, modelPx = 6 }
 local function Get(key)
 	local v = ns.DB()[key]
 	if v == nil then return ns.modelDefaults[key] end
@@ -667,9 +672,9 @@ end
 local CONTROLS = {
 	{
 		kind = "choice", key = "GPS3D_BuildingModels", name = "Buildings close up",
-		tooltip = "The game's own building models within the model distance, where the game lets an addon draw them (checked once per game version; GPS3D says in chat what it found), or GPS's simplified shapes. Further away, buildings are always the simplified shapes (/gps3d models buildings).",
+		tooltip = "GPS's simplified shapes (the default), or the game's own building models within the model distance, where the game lets an addon draw them (checked once per game version; GPS3D says in chat what it found). Trying the game's models crashed the game once (Forever, October 2026): save your work first. Further away, buildings are always the simplified shapes (/gps3d models buildings).",
 		default = ns.modelDefaults.buildingModels,
-		choices = function() return { { "game", "The game's models" }, { "simple", "Simplified shapes" } } end,
+		choices = function() return { { "simple", "Simplified shapes" }, { "game", "The game's models (may crash the game)" } } end,
 		get = function() return GPS3D_DB and GPS3D_DB.buildingModels end,
 		set = function(v) Set("buildingModels", v) end,
 	},
@@ -730,7 +735,9 @@ SlashCmdList.GPS3D = function(msg)
 	local what, arg = rest:match("^(%S*)%s*(.-)$")
 	what = what:lower()
 	local n = tonumber(arg)
-	if what == "buildings" and (arg == "game" or arg == "simple") then Set("buildingModels", arg)
+	if what == "buildings" and (arg == "game" or arg == "simple") then
+		Set("buildingModels", arg)
+		if arg == "game" then print("|cff55ff55GPS3D|r: trying the game's own buildings. This crashed the game once (Forever, October 2026); /gps3d models buildings simple goes back.") end
 	elseif what == "props" and (arg == "on" or arg == "off") then Set("props", arg == "on")
 	elseif what == "caves" and (arg == "on" or arg == "off") then Set("caves", arg == "on")
 	elseif what == "count" and n then Set("modelCount", max(0, floor(n)))

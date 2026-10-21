@@ -40,7 +40,7 @@ def check(name, ok, detail=''):
     return bool(ok)
 
 class Game:
-    def __init__(self, patch=None, with_models=True, wmo=True, before=False, props=None):
+    def __init__(self, patch=None, with_models=True, wmo=True, before=False, props=None, buildings='game'):
         if MUT and not patch: patch = MUTATIONS[MUT][0]
         OLD = os.path.join(ROOT, 'notes', 'rollback-before-game-models')
         self.L = lupa54.LuaRuntime(); G = self.G = self.L.globals()
@@ -66,6 +66,9 @@ class Game:
         self.ns = G.SANDBOX.namespaces['GPS3D']
         if props is not None:  # (props and trees are off by default since 2026-10-19; checks that count them turn them on)
             self.L.eval('function(v) GPS3D_DB = GPS3D_DB or {}; GPS3D_DB.props = v end')(props); self.ns.ModelsChanged()
+        if buildings is not None:  # (the game's buildings are not the default since 2026-10-21; the checks of them choose them)
+            self.L.eval('function(v) GPS3D_DB = GPS3D_DB or {}; GPS3D_DB.buildingModels = v end')(buildings)
+            if self.ns.ModelsChanged: self.ns.ModelsChanged()  # (not in the GPS3D from before the models)
         self.chat()
     def tick(self, n=1, dt=1 / 30):
         for _ in range(n): self.G.SANDBOX_TICK(dt, W, H)
@@ -152,7 +155,7 @@ def expected(g, R, minPx, props=True, buildings=True, slack=0.0):
 
 def key(p): return (p['fdid'], round(p['x'], 2), round(p['y'], 2))
 
-g = Game()
+g = Game(buildings=None)
 G, ns = g.G, g.ns
 st = ns.modelState
 g.open3d()
@@ -192,13 +195,16 @@ check('data: the buildings list holds every building of the map', int(wl.n) == s
 GX, GY = 32.3 * TILE, -49.5 * TILE
 g.free_view(GX, GY, 300)
 g.tick(15)
-# props and trees are off by default (2026-10-19): a fresh game shows the buildings only
+# a fresh game gives the game no models at all (props and trees off since 2026-10-19; the game's buildings
+# not the default since 2026-10-21: trying one crashed the game the first time the 3D view opened in Forever),
+# so no building check runs; the simplified shapes are drawn
 acts0 = g.actors()
-n_props0 = sum(1 for a in acts0 if find(a) and not find(a)['wmo'])
-n_wmo0 = sum(1 for a in acts0 if find(a) and find(a)['wmo'])
-check('props and trees off by default: a fresh game draws no props or trees, the buildings still', g.G.GPS3D_DB.props is None and not ns.ModelSetting('props') and n_props0 == 0 and n_wmo0 > 0,
-      f'saved {g.G.GPS3D_DB.props}, {n_props0} props, {n_wmo0} buildings')
-g.G.GPS3D_DB.props = True; ns.ModelsChanged(); g.tick(15)
+st0 = ns.modelState
+check('a fresh game gives the game no models: no props or trees, no buildings, no building check; the simplified shapes drawn',
+      g.G.GPS3D_DB.props is None and g.G.GPS3D_DB.buildingModels is None and not ns.ModelSetting('props') and ns.ModelSetting('buildingModels') == 'simple'
+      and len(acts0) == 0 and len(st0.pool) == 0 and st0.wmo is None and g.G.GPS3D_DB.wmoCheck is None and int(ns.stats.detail) > 0,
+      f'{len(acts0)} models shown, {len(st0.pool)} actors made, building check {st0.wmo}, {ns.stats.detail} simplified blocks')
+g.G.GPS3D_DB.props = True; g.G.GPS3D_DB.buildingModels = 'game'; ns.ModelsChanged(); g.tick(15)
 R, PX, COUNT = int(ns.ModelSetting('modelRange')), float(ns.ModelSetting('modelPx')), int(ns.ModelSetting('modelCount'))
 acts = g.actors()
 unmatched = [a for a in acts if not find(a)]
@@ -325,7 +331,7 @@ G.GPS3D_DB.buildingModels = 'simple'; ns.ModelsChanged(); g.tick(10)
 log2, drawn_simple = cover_frame()
 check('simplified shapes chosen: no block gives way, more blocks drawn, no building models', not any(r for _, _, r in log2) and drawn_simple > drawn_game and not any(find(a)['wmo'] for a in g.actors()),
       f'{drawn_simple} blocks vs {drawn_game}')
-G.GPS3D_DB.buildingModels = None; ns.ModelsChanged(); g.tick(10)
+G.GPS3D_DB.buildingModels = 'game'; ns.ModelsChanged(); g.tick(10)
 wmo_on = sum(1 for a in g.actors() if find(a)['wmo'])
 ns.SetDetail(False); g.tick(10)
 check('Buildings off: no building models either (props stay)', wmo_on > 0 and not any(find(a)['wmo'] for a in g.actors()) and any(not find(a)['wmo'] for a in g.actors()), f'{wmo_on} buildings before')
