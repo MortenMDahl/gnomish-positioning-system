@@ -302,9 +302,14 @@ local function GridHeight(map, x, y)
 	local u, v = fx - i, fy - j
 	local r0, r1 = j * GRID + i + 1, (j + 1) * GRID + i + 1
 	local h00, h10, h01, h11 = h[r0], h[r0 + 1], h[r1], h[r1 + 1]
-	-- each cell is split along its north-west to south-east diagonal
-	if u >= v then return h00 + (h10 - h00) * u + (h11 - h10) * v end
-	return h00 + (h11 - h01) * u + (h01 - h00) * v
+	-- each cell split along the diagonal the ground has at full detail (Terrain.lua's bintree, since
+	-- 2026-10-22): north-west to south-east where i + j is even, north-east to south-west where it is odd
+	if (i + j) % 2 == 0 then
+		if u >= v then return h00 + (h10 - h00) * u + (h11 - h10) * v end
+		return h00 + (h11 - h01) * u + (h01 - h00) * v
+	end
+	if u + v <= 1 then return h00 + (h10 - h00) * u + (h01 - h00) * v end
+	return h11 + (h01 - h11) * (1 - u) + (h10 - h11) * (1 - v)
 end
 
 ns.GridHeight = GridHeight
@@ -348,26 +353,44 @@ end
 ------------------------------------------------------------------------------------------------
 -- Texture pool (one texture per drawn triangle)
 ------------------------------------------------------------------------------------------------
+-- Since 2026-10-22 the free textures are kept by the depth frame they are in (pool[f]), and a mesh being
+-- made asks for the frame its triangles will likely be drawn in (f, from its distance; nil: any), so most
+-- start in the right frame: moving a texture to another frame (SetParent) was a third of the sandbox's
+-- frame time zooming in, and with the uneven meshes' finer levels tiles are made more often.
 local pool, poolN, poolMade = {}, 0, 0
-local function AcquireTex()
+for f = 1, BUCKET_FRAMES do pool[f] = { n = 0 } end
+-- (and the ground's triangle tables, given back with their meshes and used again (BuildGridMesh): the
+-- uneven meshes change level twice as often as the even grids did, and a new table per triangle was a
+-- third more garbage while zooming)
+pool.tris = { n = 0 }
+local function AcquireTex(f)
 	local tex
 	if poolN > 0 then
-		tex = pool[poolN]
-		pool[poolN] = nil
+		local p = f and pool[f]
+		if not (p and p.n > 0) then
+			for k = 1, BUCKET_FRAMES do p = pool[k]; if p.n > 0 then break end end
+		end
+		tex = p[p.n]
+		p[p.n] = nil
+		p.n = p.n - 1
 		poolN = poolN - 1 -- already hidden by ReleaseTex
 	else
-		tex = bucketFrames[1]:CreateTexture(nil, "ARTWORK")
+		f = f or 1
+		tex = bucketFrames[f]:CreateTexture(nil, "ARTWORK")
 		tex:SetSize(1, 1)
 		tex:SetPoint("CENTER", canvas, "CENTER", 0, 0)
 		tex:Hide()
+		tex.bucketFrame = f
 		poolMade = poolMade + 1
 	end
 	return tex
 end
 local function ReleaseTex(tex)
 	tex:Hide()
+	local p = pool[tex.bucketFrame or 1]
+	p.n = p.n + 1
+	p[p.n] = tex
 	poolN = poolN + 1
-	pool[poolN] = tex
 end
 
 ------------------------------------------------------------------------------------------------
@@ -375,7 +398,7 @@ end
 ------------------------------------------------------------------------------------------------
 -- mesh = { vx, vy, vh, n = vertex count, tris = { { a, b, c, tex, bucket, frame, shown } }, ... }
 local meshes = {} -- key -> mesh (grid: map:key:step; detail: "d:" .. key)
-local stats = { shown = 0, culled = 0, behind = 0, ms = 0, tiles = 0, tris = 0, detail = 0, detailTris = 0, detailSkipped = 0, detailPending = 0, detailLevels = { 0, 0, 0 }, detailReach = 0, steps = {} }
+local stats = { shown = 0, culled = 0, behind = 0, ms = 0, tiles = 0, tris = 0, dmin = 0, dmax = 1, detail = 0, detailTris = 0, detailSkipped = 0, detailPending = 0, detailLevels = { 0, 0, 0 }, detailReach = 0, steps = {} }
 ns.stats = stats
 
 -- A texture remembers its file and colour (tex.file, tex.r/g/b) so pooled textures skip calls that
@@ -395,380 +418,54 @@ local function SetTriColour(t, r, g, b)
 	if tex.r ~= r or tex.g ~= g or tex.b ~= b then tex:SetVertexColor(r, g, b); tex.r, tex.g, tex.b = r, g, b end
 end
 
--- Level of detail of the ground (since 2026-10-21). Before, a tile's step (1 to 32 grid cells) came from
--- its distance alone (cells about CELL_PX on screen), its vertices jumped to their new heights the moment
--- it changed step (up to 160 px in one frame zooming in over Durotar), and neighbours' edges were matched
--- by hand (FixEdges).
--- Errors: per tile, once, from its heights: E_j, the mean height error of step 2^j's surface against the
--- full 33 x 33 grid (j = 1..5), and from it G_j, the error a step adds per triangle it saves (the largest
--- of (E_i - E_(i-1)) / triangles saved, i <= j). Until measured (LIMIT tiles a frame, nearest first) an
--- estimate from the tile's height range, blended into the real values over BLEND frames.
--- Choice: a tile may take step 2^j once its nearest point is B_j away (distance from the camera, Lod's
--- own: sqrt(across^2 + the camera's height over the ground it looks at^2)), B_j = W * max(sqrt(G_j / tau),
--- (GT_j / tau)^(1/3)): its added height error per triangle saved, falling with the square of the distance
--- (times how much a height error shows from there, Slant), and the texture's (the game maps each
--- triangle's texture linearly, off by about cell^2 / distance; GT_j = TEX * that per triangle saved,
--- falling with the cube). That puts the triangles where they lower the
--- error on screen most; in a study of seven views (offline, every tile and step) it came within 2 % of
--- the best possible allocation, while the usual per-tile largest error did worse than the old rule.
--- tau keeps the count at MORE times what the old rule drew on the tiles in view (cells about CELL_PX on
--- screen, within the budget): ChooseTiles now skips tiles out of view before testing their corners, which
--- saved more frame time than the 30 % more triangles cost (test_terrain.py's far views and zoom). tau =
--- kappa / distance^2, so zooming alone leaves the thresholds in place against the view, and kappa moves at
--- most RATE a frame. W goes from 1 to 0 between 14,000 and 18,000 yd, where the planet view takes over
--- from the coarsest step.
--- Morphing (Lod.Morph): each vertex a coarser step drops is drawn between its own height and the middle
--- of the two vertices of that step it lies between (their drawn heights), by its own distance d: its own
--- height up to Q * B, that middle from B (B of the step that drops it), linearly in between. A tile takes
--- step j only once its nearest point is past B_j, so every vertex step j drops is then already on the
--- coarser surface: changing step changes nothing on screen. A vertex on a tile edge uses the smaller B of
--- the two tiles there (the same from both sides), so where a neighbour is coarser the finer tile's edge
--- already lies on its straight edge: no cracks. (Q trades the two: a wider window moves the ground more
--- slowly while zooming but leaves more of it part way to the coarser step.) Shared edges and corners take
--- one height for both tiles (Canon; corners as the planet view takes them): 50 of the 4,243 shared edges
--- in the data differ between the two tiles, by up to 301 yd, which the old matching left open.
-local Lod = { list = {}, tau = 0, kappa = 0, map = -1, ox = 0, oy = 0, od = 1, target = 0, FOLLOW = 0.15, W = 1, cx = 0, cy = 0, dz2 = 0, VIEW = 0.3, Q = 0.8, WIDE = 150, TEX = 0.03, MORE = 1.3, RATE = 0.05, TAU_MIN = 1e-12, LIMIT = 4, BLEND = 20, BT = {} }
-do
-	local LEN = {} -- cell size of step 2^j (yards)
-	for j = 0, 5 do LEN[j] = 2 ^ j * CELL end
-	local DROP = { 1536, 384, 96, 24, 6 } -- triangles a tile saves going from step 2^(j-1) to 2^j
-	local GT = {}
-	for j = 1, 5 do GT[j] = (LEN[j] ^ 2 - LEN[j - 1] ^ 2) / DROP[j] end
-	-- every point of the 33 x 33 grid: its level L (the coarsest step 2^L that has it; 5 at the corners),
-	-- the two points of step 2^(L+1) it lies between (east-west, north-south, or on the north-west to
-	-- south-east diagonal the triangles share) and its side (1 north, 2 east, 3 south, 4 west, 0 inside)
-	local lev, pa, pb, side, byLevel = {}, {}, {}, {}, { [0] = {}, {}, {}, {}, {} }
-	local function Level(q)
-		if q == 0 then return 5 end
-		local L = 0
-		while q % 2 == 0 do q = q / 2; L = L + 1 end
-		return min(L, 5)
-	end
-	for J = 0, CELLS do
-		for I = 0, CELLS do
-			local p = J * GRID + I + 1
-			local L = min(Level(I), Level(J))
-			lev[p] = L
-			if L < 5 then
-				local hs = 2 ^ L
-				if J % (2 * hs) == 0 then pa[p], pb[p] = p - hs, p + hs
-				elseif I % (2 * hs) == 0 then pa[p], pb[p] = p - hs * GRID, p + hs * GRID
-				else pa[p], pb[p] = p - hs * GRID - hs, p + hs * GRID + hs end
-				local list = byLevel[L]
-				list[#list + 1] = p
-			end
-			side[p] = (J == 0 and 1) or (I == CELLS and 2) or (J == CELLS and 3) or (I == 0 and 4) or 0
-		end
-	end
-	-- Per mesh step s, the vertices that morph, coarsest level first (their parents are done before
-	-- them): v (mesh index), a, b (its two parents), s (which threshold: side * 5 + L + 1)
-	local function M(q, s, n) local q0 = q - 1; return (q0 - q0 % GRID) / GRID / s * (n + 1) + q0 % GRID / s + 1 end -- grid point -> mesh vertex
-	local shapes = {}
-	for k = 0, 5 do
-		local s, n = 2 ^ k, CELLS / 2 ^ k
-		local sh = { v = {}, a = {}, b = {}, s = {}, n = 0, lv = k + 1 } -- (lv: the first step whose vertices it drops)
-		for L = 4, k, -1 do
-			for j = 0, n do
-				for i = 0, n do
-					local p = j * s * GRID + i * s + 1
-					if lev[p] == L then
-						sh.n = sh.n + 1
-						sh.v[sh.n], sh.a[sh.n], sh.b[sh.n], sh.s[sh.n] = j * (n + 1) + i + 1, M(pa[p], s, n), M(pb[p], s, n), side[p] * 5 + L + 1
-					end
-				end
-			end
-		end
-		shapes[s] = sh
-	end
-	Lod.shapes = shapes
+-- Level of detail of the ground: Terrain.lua (ns.Lod; since 2026-10-22 an uneven mesh per tile, a bintree
+-- whose triangles go where the relief is, eleven levels from 2048 triangles to 2; from 2026-10-21 to then
+-- even grids of steps 1 to 32 cells chosen the same way). ChooseTiles picks each tile's level by the height
+-- error each triangle takes off the screen, within the budget; vertices morph toward the coarser level
+-- before a tile switches, so nothing jumps and no cracks open. (Before 2026-10-21 a tile's step came from
+-- its distance alone, its vertices jumped to their new heights the moment it changed step, up to 160 px in
+-- one frame zooming in over Durotar, and neighbours' edges were matched by hand.)
+local Lod = { list = {}, tau = 0, kappa = 0, map = -1, ox = 0, oy = 0, od = 1, target = 0, FOLLOW = 0.15, W = 1, cx = 0, cy = 0, dz2 = 0, F = 1, frame = 0, VIEW = 0.3, MORE = 1.3, RATE = 0.05, TAU_MIN = 1e-12 }
+ns.Lod = Lod
 
-	-- Height at a tile corner, as the planet view takes it (Globe.lua's CornerHeight): the tile to the
-	-- south-east of the corner first.
-	local function CornerHeight(map, i, j)
-		local h = TileHeights(map, i, j)
-		if h then return h[1] end
-		h = TileHeights(map, i - 1, j); if h then return h[GRID] end
-		h = TileHeights(map, i, j - 1); if h then return h[CELLS * GRID + 1] end
-		h = TileHeights(map, i - 1, j - 1); if h then return h[GRID * GRID] end
-		return 0
-	end
-	-- One height for points two tiles share: a corner as above, an east edge from the tile to the east
-	-- and a south edge from the tile to the south (where they exist), so the west column and north row
-	-- are each tile's own. (i, j: the point in the tile's 33 x 33 grid, from 0.)
-	local function Canon(map, tx, ty, h, i, j)
-		if (i == 0 or i == CELLS) and (j == 0 or j == CELLS) then return CornerHeight(map, tx + i / CELLS, ty + j / CELLS) end
-		if i == CELLS then
-			local e = TileHeights(map, tx + 1, ty)
-			if e then return e[j * GRID + 1] end
-		elseif j == CELLS then
-			local e = TileHeights(map, tx, ty + 1)
-			if e then return e[i + 1] end
-		end
-		return h[j * GRID + i + 1]
-	end
-	Lod.Canon = Canon
-
-	-- A tile's record: { G = in use, est, real (once measured), t = frame measured, B = thresholds this
-	-- frame (f = that frame), nb = its four neighbours' records (false: none) }.
-	-- (PE: the mean error of steps 2 to 32 as a share of the height range, the 75th percentile over the
-	-- 1,503 tiles that are not flat; an estimate errs toward detail)
-	local PE = { 0.02, 0.042, 0.08, 0.14, 0.23 }
-	local tiles = {}
-	local function Grow(E, G) -- G from E: per triangle saved, never falling from step to step
-		local g, prev = 0, 0
-		for j = 1, 5 do
-			local v = (E[j] - prev) / DROP[j]
-			prev = E[j]
-			if v > g then g = v end
-			G[j] = g
-		end
-		return G
-	end
-	local function Tile(map, tx, ty)
-		if tx < 0 or tx > 63 or ty < 0 or ty > 63 then return false end
-		local key = map * 4096 + ty * 64 + tx
-		local r = tiles[key]
-		if r ~= nil then return r end
-		local h = TileHeights(map, tx, ty)
-		if not h then tiles[key] = false return false end
-		local range, E = h.hi - h.lo, {}
-		for j = 1, 5 do E[j] = range * PE[j] end
-		r = { map = map, tx = tx, ty = ty, est = Grow(E, {}), G = {}, B = {}, f = -1, t = 0 }
-		for j = 1, 5 do r.G[j] = r.est[j] end
-		tiles[key] = r
-		return r
-	end
-	function Lod.Tile(map, tx, ty)
-		local r = Tile(map, tx, ty)
-		if not r.nb then r.nb = { Tile(map, tx, ty - 1), Tile(map, tx + 1, ty), Tile(map, tx, ty + 1), Tile(map, tx - 1, ty) } end
-		return r
-	end
-	-- the real errors: the surface of each step worked out at every grid point, coarse to fine (a point's
-	-- value is the middle of its two parents'), against the heights
-	local hts, cur, E = {}, {}, {}
-	function Lod.Measure(r, now)
-		local map, tx, ty = r.map, r.tx, r.ty
-		local h = TileHeights(map, tx, ty)
-		for p = 1, GRID * GRID do hts[p] = h[p] end
-		local e = TileHeights(map, tx + 1, ty)
-		if e then for j = 0, CELLS do hts[j * GRID + GRID] = e[j * GRID + 1] end end
-		e = TileHeights(map, tx, ty + 1)
-		if e then for i = 0, CELLS do hts[CELLS * GRID + i + 1] = e[i + 1] end end
-		hts[1], hts[GRID] = CornerHeight(map, tx, ty), CornerHeight(map, tx + 1, ty)
-		hts[CELLS * GRID + 1], hts[GRID * GRID] = CornerHeight(map, tx, ty + 1), CornerHeight(map, tx + 1, ty + 1)
-		local c, t, A, Bp = cur, hts, pa, pb
-		c[1], c[GRID], c[CELLS * GRID + 1], c[GRID * GRID] = t[1], t[GRID], t[CELLS * GRID + 1], t[GRID * GRID]
-		for k = 5, 1, -1 do
-			if k < 5 then local list = byLevel[k]; for q = 1, #list do local p = list[q]; c[p] = t[p] end end
-			local sum = 0
-			for L = k - 1, 0, -1 do
-				local list = byLevel[L]
-				for q = 1, #list do
-					local p = list[q]
-					local v = (c[A[p]] + c[Bp[p]]) * 0.5
-					c[p] = v
-					v = v - t[p]
-					if v < 0 then sum = sum - v else sum = sum + v end
-				end
-			end
-			E[k] = sum / (GRID * GRID)
-		end
-		r.real, r.t = Grow(E, {}), now
-	end
-	-- a tile's G this frame (its estimate blending into its real errors)
-	local function Blend(r, now)
-		local real = r.real
-		if real and not r.done then
-			local w = (now - r.t) / Lod.BLEND
-			if w >= 1 then w = 1; r.done = true end
-			local G, est = r.G, r.est
-			for j = 1, 5 do G[j] = est[j] + (real[j] - est[j]) * w end
-		end
-	end
-	Lod.Blend = Blend
-	-- (VIEW: a height error shows on screen by the sine of the angle between the line of sight and the
-	-- vertical, across / distance at the tile's nearest point, but at least VIEW)
-	local function Slant(r)
-		local x0, y1 = r.tx * TILE, -r.ty * TILE
-		local cx, cy = Lod.cx, Lod.cy
-		local nx, ny = min(x0 + TILE, max(x0, cx)) - cx, min(y1, max(y1 - TILE, cy)) - cy
-		local a2 = nx * nx + ny * ny
-		local v = sqrt(a2 / (a2 + Lod.dz2))
-		return v > Lod.VIEW and v or Lod.VIEW
-	end
-	-- this frame's thresholds of a tile
-	function Lod.Thresholds(r, now)
-		if r.f == now then return r.B end
-		r.f = now
-		Blend(r, now)
-		local G, B = r.G, r.B
-		local W, it, BT = Lod.W, Slant(r) / Lod.tau, Lod.BT
-		for j = 1, 5 do
-			local b = W * sqrt(G[j] * it)
-			if b < BT[j] then b = BT[j] end
-			B[j] = b
-		end
-		return B
-	end
-	-- The budget: C[j][i], the tolerance from which tile i may take step 2^j (Lod.Critical fills them;
-	-- they never fall from step to step). Count: the triangles at tolerance tau; Solve: the smallest
-	-- tolerance (not under TAU_MIN) with at most target triangles.
-	local C = { {}, {}, {}, {}, {} }
-	function Lod.Critical(i, r, ld, W)
-		local G, prev = r.G, 0
-		local W2, W3 = W * W * Slant(r) / (ld * ld), W * W * W * Lod.TEX / (ld * ld * ld)
-		for j = 1, 5 do
-			local a, b = G[j] * W2, GT[j] * W3
-			if b > a then a = b end
-			if a < prev then a = prev end
-			prev = a
-			C[j][i] = a
-		end
-	end
-	local C1, C2, C3, C4, C5 = C[1], C[2], C[3], C[4], C[5]
-	local function Count(n, tau)
-		local t = 0
-		for i = 1, n do
-			if C1[i] > tau then t = t + 2048
-			elseif C2[i] > tau then t = t + 512
-			elseif C3[i] > tau then t = t + 128
-			elseif C4[i] > tau then t = t + 32
-			elseif C5[i] > tau then t = t + 8
-			else t = t + 2 end
-		end
-		return t
-	end
-	Lod.Count = Count
-	function Lod.Solve(n, target)
-		local lo = Lod.TAU_MIN
-		if n == 0 or Count(n, lo) <= target then return lo end
-		local hi = lo
-		for i = 1, n do if C5[i] > hi then hi = C5[i] end end -- every tile at its coarsest
-		if hi <= lo or Count(n, hi) > target then return hi end
-		for _ = 1, 60 do
-			local mid = sqrt(lo * hi)
-			if Count(n, mid) <= target then hi = mid else lo = mid end
-			if hi < lo * 1.001 then break end
-		end
-		return hi
-	end
-	-- the texture's part of the thresholds, the same for every tile (per frame, once tau is known)
-	function Lod.SetTau(tau, W)
-		Lod.tau, Lod.W = tau, W
-		for j = 1, 5 do Lod.BT[j] = W * (GT[j] * Lod.TEX / tau) ^ (1 / 3) end
-	end
-
-	-- Draws a grid mesh's vertices for this frame: the thresholds of its inside and its four edges (the
-	-- smaller of the two tiles'), then every vertex that can morph, coarsest first (cx, cy: the camera)
-	-- A mesh none of whose vertices is part way, and each as last frame, keeps its heights.
-	function Lod.Morph(mesh, cx, cy, now)
-		local sh = mesh.shape
-		if sh.n == 0 then return end -- (the coarsest step: nothing morphs)
-		local r, thr, thrA = mesh.rec, mesh.thr, mesh.thrA
-		local B = Lod.Thresholds(r, now)
-		local nb = r.nb
-		local dz2, Q, WIDE = Lod.dz2, Lod.Q, Lod.WIDE
-		-- the tile's nearest and farthest point (squared distances)
-		local x0, y1 = mesh.tx * TILE, -mesh.ty * TILE
-		local nx, ny = min(x0 + TILE, max(x0, cx)) - cx, min(y1, max(y1 - TILE, cy)) - cy
-		local fx_, fy_ = max(abs(x0 - cx), abs(x0 + TILE - cx)), max(abs(y1 - cy), abs(y1 - TILE - cy))
-		local near2, far2 = nx * nx + ny * ny + dz2, fx_ * fx_ + fy_ * fy_ + dz2
-		local sig, moving = 0, false
-		for s = 0, 4 do
-			local o = s > 0 and nb[s]
-			local N = o and Lod.Thresholds(o, now)
-			for j = sh.lv, 5 do
-				local b = B[j]
-				if N and N[j] < b then b = N[j] end
-				-- the window [a, b]: (1 - Q) of b wide, but at least WIDE yd (or half of b) so that near the
-				-- camera, where a yard is many pixels, the ground does not move too fast while zooming
-				local w = b * (1 - Q)
-				local w2 = b * 0.5
-				if w2 > WIDE then w2 = WIDE end
-				if w < w2 then w = w2 end
-				local a = b - w
-				thr[s * 5 + j], thrA[s * 5 + j] = b, a
-				if b * b <= near2 then sig = sig * 3 + 1
-				elseif a * a >= far2 then sig = sig * 3
-				else moving = true end
-			end
-		end
-		if not moving and mesh.sig == sig then return end
-		mesh.sig = not moving and sig or -1
-		local sv, sa, sb, ss = sh.v, sh.a, sh.b, sh.s
-		local vx, vy, g, vh = mesh.vx, mesh.vy, mesh.g, mesh.vh
-		for i = 1, sh.n do
-			local k = sv[i]
-			local slot = ss[i]
-			local b = thr[slot]
-			local dx, dy = vx[k] - cx, vy[k] - cy
-			local d2 = dx * dx + dy * dy + dz2
-			if d2 >= b * b then
-				vh[k] = (vh[sa[i]] + vh[sb[i]]) * 0.5
-			else
-				local A = thrA[slot]
-				local own = g[k]
-				if d2 <= A * A then
-					vh[k] = own
-				else
-					vh[k] = own + ((vh[sa[i]] + vh[sb[i]]) * 0.5 - own) * (sqrt(d2) - A) / (b - A)
-				end
-			end
-		end
-	end
-end
-
-local function BuildGridMesh(map, tx, ty, step, sharp)
+local function BuildGridMesh(map, tx, ty, level, sharp, f)
 	local h = TileHeights(map, tx, ty)
 	if not h then return nil end
-	local n = CELLS / step
+	local mesh, nTris = Lod.NewMesh(map, tx, ty, level, h) -- its vertices and triangles (Terrain.lua)
+	local vx, vy = mesh.vx, mesh.vy
 	local x0, y0 = tx * TILE, -ty * TILE
-	local vx, vy, vh, g, fixed = {}, {}, {}, {}, {}
-	local k = 0
-	for j = 0, n do
-		for i = 0, n do
-			k = k + 1
-			vx[k] = x0 + i * step * CELL
-			vy[k] = y0 - j * step * CELL
-			g[k] = Lod.Canon(map, tx, ty, h, i * step, j * step) -- its own height (vh: as drawn, Lod.Morph)
-			vh[k] = g[k]
-			-- vertices on the tile's edge are shared with neighbours (and T-junctions): always drawn exactly
-			if i == 0 or j == 0 or i == n or j == n then fixed[k] = true end
-		end
-	end
 	local file, au, av, aw, ah
 	local sea = ns.OpenSeaTile(map, tx, ty) and GPS.colors.sea -- open sea: the background's colour, no image
 	if sharp and not sea then file = MinimapFile(map, tx, ty) end
 	if file or sea then au, av, aw, ah = 0, 0, 1, 1 else file, au, av, aw, ah = OverviewOf(map, tx, ty) end
-	local tris, nTris = {}, 0
-	local row = n + 1
-	local mesh = { map = map, tx = tx, ty = ty, tkey = ty * 64 + tx, step = step, n = n, vx = vx, vy = vy, vh = vh, g = g, h = h, tris = tris, px = {}, py = {}, pd = {}, fixed = fixed,
-		shape = Lod.shapes[step], rec = Lod.Tile(map, tx, ty), thr = {}, thrA = {} }
+	local tris = {}
+	mesh.tris = tris
+	local ta, tb, tc = Lod.ta, Lod.tb, Lod.tc
 	local uScale, vScale = aw / TILE, ah / TILE
-	for j = 0, n - 1 do
-		for i = 0, n - 1 do
-			local v00 = j * row + i + 1
-			local v10, v01, v11 = v00 + 1, v00 + row, v00 + row + 1
-			-- (00, 01, 11) and (00, 11, 10): front faces seen from above
-			for q = 1, 2 do
-				local a, b, c
-				if q == 1 then a, b, c = v00, v01, v11 else a, b, c = v00, v11, v10 end
-				local t = { a = a, b = b, c = c, tex = AcquireTex(), bucket = -1, frame = 1, shown = false, mesh = mesh }
-				-- building block under the triangle's centre (it is drawn behind a building block there)
-				local ex = (vx[a] + vx[b] + vx[c]) / 3 - x0
-				local sy = y0 - (vy[a] + vy[b] + vy[c]) / 3
-				t.blk = min(BLOCKS - 1, floor(sy / BLOCK)) * BLOCKS + min(BLOCKS - 1, floor(ex / BLOCK))
-				if file then
-					SetTriTexture(t, file, au + (vx[a] - x0) * uScale, av + (y0 - vy[a]) * vScale, au + (vx[b] - x0) * uScale, av + (y0 - vy[b]) * vScale, au + (vx[c] - x0) * uScale, av + (y0 - vy[c]) * vScale)
-				elseif sea then
-					SetTriColour(t, sea[1], sea[2], sea[3])
-				else
-					SetTriColour(t, 0.35, 0.42, 0.3)
-				end
-				nTris = nTris + 1
-				tris[nTris] = t
-			end
+	local free = pool.tris
+	for q = 1, nTris do
+		local a, b, c = ta[q], tb[q], tc[q] -- (front faces seen from above)
+		local t, nf = nil, free.n
+		if nf > 0 then
+			t = free[nf]
+			free[nf], free.n = nil, nf - 1
+			t.a, t.b, t.c, t.tex, t.bucket, t.frame, t.shown, t.mesh, t.clipped = a, b, c, AcquireTex(f), -1, 1, false, mesh, nil
+			t.x1, t.y1, t.x2, t.y2, t.x3, t.y3 = nil, nil, nil, nil, nil, nil
+		else
+			t = { a = a, b = b, c = c, tex = AcquireTex(f), bucket = -1, frame = 1, shown = false, mesh = mesh }
 		end
+		-- building block under the triangle's centre (it is drawn behind a building block there)
+		local ex = (vx[a] + vx[b] + vx[c]) / 3 - x0
+		local sy = y0 - (vy[a] + vy[b] + vy[c]) / 3
+		t.blk = min(BLOCKS - 1, floor(sy / BLOCK)) * BLOCKS + min(BLOCKS - 1, floor(ex / BLOCK))
+		if file then
+			SetTriTexture(t, file, au + (vx[a] - x0) * uScale, av + (y0 - vy[a]) * vScale, au + (vx[b] - x0) * uScale, av + (y0 - vy[b]) * vScale, au + (vx[c] - x0) * uScale, av + (y0 - vy[c]) * vScale)
+		elseif sea then
+			SetTriColour(t, sea[1], sea[2], sea[3])
+		else
+			SetTriColour(t, 0.35, 0.42, 0.3)
+		end
+		tris[q] = t
 	end
 	return mesh
 end
@@ -776,7 +473,11 @@ end
 local function ReleaseMesh(key)
 	local m = meshes[key]
 	if not m then return end
-	for _, t in ipairs(m.tris) do t.shown = false; ReleaseTex(t.tex) end
+	local free = m.g and pool.tris -- (grid meshes: their triangle tables too)
+	for _, t in ipairs(m.tris) do
+		t.shown = false; ReleaseTex(t.tex)
+		if free then t.tex, t.mesh = nil, nil; free.n = free.n + 1; free[free.n] = t end
+	end
 	meshes[key] = nil
 end
 
@@ -1431,7 +1132,7 @@ local function BoxInView(x0, x1, y0, y1, lo, hi, F, fx, fy, fz, rx, ry, ux, uy, 
 end
 
 -- Tiles in view with a level of detail each, within the triangle budget: fills cands, returns how many.
--- (The level of detail: see Lod above.)
+-- (The level of detail: Terrain.lua.)
 local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	local map = cam.map
 	local m = ns.World[map]
@@ -1452,38 +1153,55 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	-- outside one of them anywhere is out of view whatever BoxInView says (it keeps boxes reaching
 	-- behind the camera): it stays a candidate for its building blocks, but its ground is not drawn
 	-- (c.grid false; before, it was drawn and all its triangles culled) and the level of detail leaves
-	-- it out (Lod.list: the tiles whose ground is drawn).
+	-- it out (Lod.list: the tiles whose ground is drawn). Since 2026-10-22 blocks of 4 x 4 tiles are
+	-- tested first the same way (a sphere holding their tiles' spheres, Lod.Blocks), so the tiles of a
+	-- block wholly out of view are not looked at: zoomed out, the tiles in range but out of view (Kalimdor
+	-- from Mount Hyjal at 5,000 yd: about 900 in range, 240 in view) had taken half of a frame's time.
 	local list, ng = Lod.list, 0
 	local kw, kh = halfW / F, halfH / F
 	local nw, nh = sqrt(1 + kw * kw), sqrt(1 + kh * kh)
-	for ty = max(0, floor(tgy) - r), min(63, floor(tgy) + r) do
-		for tx = max(0, floor(tgx) - r), min(63, floor(tgx) + r) do
-			local key = ty * 64 + tx
-			if m[key] then
-				local x0, x1, y1, y0 = tx * TILE, (tx + 1) * TILE, -ty * TILE, -(ty + 1) * TILE
-				local nx, ny = min(x1, max(x0, cx)), min(y1, max(y0, cy))
-				local d2 = (nx - cx) ^ 2 + (ny - cy) ^ 2
-				if d2 <= range * range then
-					local h = TileHeights(map, tx, ty)
-					local px_, py_, pz_ = x0 + TILE / 2 - cx, y0 + TILE / 2 - cy, (h.lo + h.hi) / 2 - cz
-					local rad_ = sqrt(TILE * TILE / 2 + (h.hi - h.lo) ^ 2 / 4)
-					local pf, pr, pu = px_ * fx + py_ * fy + pz_ * fz, px_ * rx + py_ * ry, px_ * ux + py_ * uy + pz_ * uz
-					local hidden = pr - kw * pf > rad_ * nw or -pr - kw * pf > rad_ * nw or pu - kh * pf > rad_ * nh or -pu - kh * pf > rad_ * nh
-					if not (pf + rad_ <= NEAR or (hidden and pf - rad_ > NEAR)) and BoxInView(x0, x1, y0, y1, h.lo, h.hi, F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, halfW, halfH) then
-						-- distance to the ground at the tile's nearest point; never less than half the
-						-- camera distance (the camera may hang inside a tall tile's box)
-						local dz = cz - (GridHeight(map, nx, ny) or h.lo)
-						local tdx, tdy = min(x1, max(x0, camx)), min(y1, max(y0, camy))
-						n = n + 1
-						local c = cands[n]
-						if not c then c = {}; cands[n] = c end
-						c.tx, c.ty, c.key = tx, ty, key
-						c.d = max(sqrt(d2 + dz * dz), halfDist)
-						c.toTarget = sqrt((tdx - camx) ^ 2 + (tdy - camy) ^ 2)
-						c.ld = sqrt(d2 + dz2)
-						c.rec = Lod.Tile(map, tx, ty)
-						c.grid, c.step = not hidden, CELLS
-						if not hidden then ng = ng + 1; list[ng] = c end
+	local tx0, tx1, ty0, ty1 = max(0, floor(tgx) - r), min(63, floor(tgx) + r), max(0, floor(tgy) - r), min(63, floor(tgy) + r)
+	local blocks = Lod.Blocks(map)
+	for by = floor(ty0 / 4), floor(ty1 / 4) do
+		for bx = floor(tx0 / 4), floor(tx1 / 4) do
+			local bs = blocks[by * 16 + bx]
+			local px_, py_, pz_, rad_ = 0, 0, 0, 0
+			if bs then px_, py_, pz_, rad_ = bs[1] - cx, bs[2] - cy, bs[3] - cz, bs[4] end
+			local pf, pr, pu = px_ * fx + py_ * fy + pz_ * fz, px_ * rx + py_ * ry, px_ * ux + py_ * uy + pz_ * uz
+			if bs and not (pf + rad_ <= NEAR or ((pr - kw * pf > rad_ * nw or -pr - kw * pf > rad_ * nw or pu - kh * pf > rad_ * nh or -pu - kh * pf > rad_ * nh) and pf - rad_ > NEAR)) then
+				for ty = max(ty0, by * 4), min(ty1, by * 4 + 3) do
+					for tx = max(tx0, bx * 4), min(tx1, bx * 4 + 3) do
+						local key = ty * 64 + tx
+						if m[key] then
+							local x0, x1, y1, y0 = tx * TILE, (tx + 1) * TILE, -ty * TILE, -(ty + 1) * TILE
+							local nx, ny = min(x1, max(x0, cx)), min(y1, max(y0, cy))
+							local d2 = (nx - cx) ^ 2 + (ny - cy) ^ 2
+							if d2 <= range * range then
+								local h = TileHeights(map, tx, ty)
+								px_, py_, pz_ = x0 + TILE / 2 - cx, y0 + TILE / 2 - cy, (h.lo + h.hi) / 2 - cz
+								rad_ = sqrt(TILE * TILE / 2 + (h.hi - h.lo) ^ 2 / 4)
+								pf, pr, pu = px_ * fx + py_ * fy + pz_ * fz, px_ * rx + py_ * ry, px_ * ux + py_ * uy + pz_ * uz
+								local hidden = pr - kw * pf > rad_ * nw or -pr - kw * pf > rad_ * nw or pu - kh * pf > rad_ * nh or -pu - kh * pf > rad_ * nh
+								-- (a sphere wholly in front and inside all four planes: in view, BoxInView not needed)
+								if not (pf + rad_ <= NEAR or (hidden and pf - rad_ > NEAR)) and ((pf - rad_ > NEAR and pr - kw * pf < -rad_ * nw and -pr - kw * pf < -rad_ * nw and pu - kh * pf < -rad_ * nh and -pu - kh * pf < -rad_ * nh)
+									or BoxInView(x0, x1, y0, y1, h.lo, h.hi, F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, halfW, halfH)) then
+									-- distance to the ground at the tile's nearest point; never less than half the
+									-- camera distance (the camera may hang inside a tall tile's box)
+									local dz = cz - (GridHeight(map, nx, ny) or h.lo)
+									local tdx, tdy = min(x1, max(x0, camx)), min(y1, max(y0, camy))
+									n = n + 1
+									local c = cands[n]
+									if not c then c = {}; cands[n] = c end
+									c.tx, c.ty, c.key = tx, ty, key
+									c.d = max(sqrt(d2 + dz * dz), halfDist)
+									c.toTarget = sqrt((tdx - camx) ^ 2 + (tdy - camy) ^ 2)
+									c.ld = sqrt(d2 + dz2)
+									c.rec = Lod.Tile(map, tx, ty)
+									c.grid, c.level = not hidden, 10
+									if not hidden then ng = ng + 1; list[ng] = c end
+								end
+							end
+						end
 					end
 				end
 			end
@@ -1512,27 +1230,17 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	target = min(target * Lod.MORE, TRI_BUDGET)
 	if not fresh then target = Lod.target + (target - Lod.target) * Lod.FOLLOW end
 	Lod.target = target
-	-- the real errors of the nearest tiles still on estimates, LIMIT a frame
-	local pending = 0
-	for pass = 1, Lod.LIMIT + 1 do
-		local best, bd = nil, HUGE
-		for i = 1, ng do local c = list[i]; if not c.rec.real and c.ld < bd then best, bd = c, c.ld end end
-		if not best then break end
-		if pass > Lod.LIMIT then pending = 1 break end
-		Lod.Measure(best.rec, frameNo)
-	end
-	-- zoomed out toward the planet view's hand-over, every tile goes to its coarsest step (W to 0: the
+	-- zoomed out toward the planet view's hand-over, every tile goes to its coarsest level (W to 0: the
 	-- planet draws tiles by their corners)
 	local W, GL = 1, ns.GLOBE
 	if GL and cam.dist > GL.FLAT_MAX then
 		local s = min(1, (cam.dist - GL.FLAT_MAX) / (GL.HANDOVER - GL.FLAT_MAX))
 		W = 1 - s * s * (3 - 2 * s)
 	end
-	-- the tolerance from which each tile may take each step
-	Lod.cx, Lod.cy, Lod.dz2 = cx, cy, dz2
+	-- the tolerance from which each tile may take each level
+	Lod.cx, Lod.cy, Lod.dz2, Lod.F, Lod.frame = cx, cy, dz2, F, frameNo
 	for i = 1, ng do
 		local c = list[i]
-		Lod.Blend(c.rec, frameNo)
 		Lod.Critical(i, c.rec, c.ld, W)
 	end
 	-- the tolerance: tau = kappa / distance^2, so zooming alone leaves the thresholds where they are
@@ -1557,15 +1265,11 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	Lod.kappa = kappa
 	Lod.SetTau(tau, W)
 	Lod.map = map
-	stats.tau, stats.lodPending = tau, pending
-	-- each tile's step: the coarsest whose threshold its nearest point is past
+	stats.tau = tau
+	-- each tile's level: the coarsest whose threshold its nearest point is past
 	for i = 1, ng do
 		local c = list[i]
-		local B, ld, step = Lod.Thresholds(c.rec, frameNo), c.ld, 1
-		for j = 1, 5 do
-			if ld >= B[j] then step = step * 2 else break end
-		end
-		c.step = step
+		c.level = Lod.Level(c.rec, c.ld, frameNo)
 	end
 	return n
 end
@@ -1738,12 +1442,16 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	local mapKey = map * 4096
 	for i = 1, nCands do
 		local c = cands[i]
-		local tx, ty, step = c.tx, c.ty, c.step
+		local tx, ty, level = c.tx, c.ty, c.level
 		-- the sharp minimap image whenever the tile is big on screen at its nearest point
 		local sharp = TILE * F / max(c.d, 1) > MINIMAP_PX
-		local key = ((mapKey + c.key) * 64 + step) * 2 + (sharp and 1 or 0) -- grid meshes: a positive number
+		local key = ((mapKey + c.key) * 64 + level) * 2 + (sharp and 1 or 0) -- grid meshes: a positive number
 		local mesh = meshes[key]
-		if not mesh and c.grid then mesh = BuildGridMesh(map, tx, ty, step, sharp); meshes[key] = mesh end
+		if not mesh and c.grid then
+			-- (the depth frame it will likely be drawn in, from last frame's depth range: AcquireTex)
+			local f = floor((stats.dmax - c.d) * (TOTAL_BUCKETS - 0.001) / max(stats.dmax - stats.dmin, 1e-6) / LAYER_BUCKETS) + 1
+			mesh = BuildGridMesh(map, tx, ty, level, sharp, f < 1 and 1 or f > BUCKET_FRAMES and BUCKET_FRAMES or f); meshes[key] = mesh
+		end
 		if mesh and c.grid then
 			mesh.key = key
 			mesh.active = frameNo
@@ -1751,7 +1459,9 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 			active[nActive] = mesh
 			lastUse[key] = now
 			stats.tris = stats.tris + #mesh.tris
-			stats.steps[step] = (stats.steps[step] or 0) + 1
+			mesh.rec.drawn, mesh.rec.df = level, frameNo
+			level = 2 ^ (11 - level) -- (stats.steps: tiles per level, by the level's triangles, 2048 to 2)
+			stats.steps[level] = (stats.steps[level] or 0) + 1
 		end
 	end
 	-- buildings: every block in view near the view's centre (ns.ChooseBlocks), on top of the grid
@@ -1806,6 +1516,7 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	end
 	-- hide what is not drawn this frame; give back textures of meshes unused for a while
 	local crowded = poolMade - poolN > TEX_LIMIT
+	stats.texMade, stats.texFree = poolMade, poolN
 	for key, mesh in pairs(meshes) do
 		if mesh.active ~= frameNo then
 			if not mesh.hidden then
@@ -1813,7 +1524,10 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 				for k = 1, #tris do local t = tris[k]; if t.shown then t.shown = false; t.tex:Hide() end end
 				mesh.hidden = true
 			end
-			if crowded or now - (lastUse[key] or 0) > KEEP_SECONDS or mesh.map ~= map then ReleaseMesh(key); lastUse[key] = nil end
+			-- (and, since 2026-10-22, a mesh of a tile drawn at another level this frame: zooming, a tile
+			-- passes through eleven levels, and their unused meshes kept 3 s held a quarter more textures)
+			local r = mesh.rec
+			if crowded or now - (lastUse[key] or 0) > KEEP_SECONDS or mesh.map ~= map or (r and r.df == frameNo and r.drawn ~= mesh.level) then ReleaseMesh(key); lastUse[key] = nil end
 		end
 	end
 	-- project the vertices; the depth range (for the buckets) from the vertices in front of the camera
@@ -1852,6 +1566,7 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	end
 	-- cull, sort into buckets and draw: one pass over the triangles
 	local scale = (TOTAL_BUCKETS - 0.001) / max(dmax - dmin, 1e-6)
+	stats.dmin, stats.dmax = dmin, dmax
 	do local w, h = canvas:GetSize(); clipW, clipH = w / 2 + 2, h / 2 + 2 end
 	local visible, nVisible, culled, behind, cut = stats.visible or {}, 0, 0, 0, 0
 	stats.visible = visible
@@ -2629,11 +2344,11 @@ local function SelfTest()
 	cam.yaw = yaw0
 	Render()
 	local steps = {}
-	for s, nT in pairs(stats.steps) do steps[#steps + 1] = s * 1000 + nT end
+	for s, nT in pairs(stats.steps) do steps[#steps + 1] = s * 10000 + nT end
 	table.sort(steps)
-	for i, v in ipairs(steps) do steps[i] = ("%dx%d"):format(v % 1000, floor(v / 1000)) end
+	for i, v in ipairs(steps) do steps[i] = ("%dx%d"):format(v % 10000, floor(v / 10000)) end
 	local lv = stats.detailLevels or { 0, 0, 0 }
-	Report("render: %.1f ms average, %.1f ms worst over 36 orbit steps; %d tiles (%s cells of 16.7 yd); buildings: %d blocks (%d fine, %d coarse, %d far) out to %.0f yd, %d triangles (%d blocks over budget); %d triangles shown, %d culled; %d textures made",
+	Report("render: %.1f ms average, %.1f ms worst over 36 orbit steps; %d tiles (%s: tiles x triangles each); buildings: %d blocks (%d fine, %d coarse, %d far) out to %.0f yd, %d triangles (%d blocks over budget); %d triangles shown, %d culled; %d textures made",
 		total / 36, worst, stats.tiles, table.concat(steps, " "), stats.detail, lv[1], lv[2], lv[3], stats.detailReach or 0, stats.detailTris, stats.detailSkipped, stats.shown, stats.culled, poolMade)
 	local fx, fy, fz = CameraBasis()
 	local gx, gy, gz = scene:GetCameraForward()

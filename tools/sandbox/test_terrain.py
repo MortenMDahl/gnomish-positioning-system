@@ -1,17 +1,21 @@
-# The 3D view's ground mesh (GPS3D.lua: ChooseTiles, BuildGridMesh, the morphing in RenderWorld), checked
-# and measured in Lua 5.4 (lupa) on the real height data:
+# The 3D view's ground mesh (GPS3D.lua: ChooseTiles, BuildGridMesh, RenderWorld; Terrain.lua since
+# 2026-10-22: the uneven per-tile meshes, their choice and morphing), checked and measured in Lua 5.4 (lupa)
+# on the real height data:
 #   pops     zooming slowly (2 % a frame) from 14,000 to 30 yd, tilted 45 degrees and straight down, at
 #            Mount Hyjal, Durotar near Orgrimmar and Elwynn Forest: how much the drawn ground moves at
 #            fixed world points from one frame to the next (the camera's own motion moves nothing there)
 #   far      fixed far views (Hyjal 5,000 yd tilted 45, Stormwind 3,000 yd tilted 45, Durotar 4,000 yd
-#            straight down): the drawn ground's error against the full 33 x 33 grid, in screen pixels,
+#            straight down, Thousand Needles and Stranglethorn 4,000 yd tilted 45): the drawn ground's
+#            error against the full 33 x 33 grid, in screen pixels,
 #            weighted by screen area (each grid point stands for the pixels its 16.7-yd cell covers)
 #   seams    every shared tile edge drawn at the same heights from both sides, also while morphing
 #   time     Render's time (processor time, so other programs running do not count) at those views, the
 #            camera turning a degree a frame, and during the zoom
 #   hand-over just short of 18,000 yd (the planet view takes over there) every tile at its coarsest step
+#   data     every tile with terrain has its levels in Data/Lod_<map>.lua, or is flat
 # GPS3D_LUA=<path> loads another GPS3D.lua in place of the sandbox's copy (to measure the code before a
-# change); TERRAIN_QUICK=1 zooms at one place only.
+# change; Terrain.lua then does nothing, as that GPS3D.lua has no ns.Lod), TERRAIN_LUA=<path> another
+# Terrain.lua (mutations); TERRAIN_QUICK=1 zooms at one place only.
 import lupa.lua54 as lupa54, math, time, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITE = os.path.join(HERE, 'site')
@@ -23,9 +27,10 @@ L.execute(open(f'{SITE}/zones.lua').read())
 toc = open(os.path.join(HERE, '..', '..', 'prototypes', 'GPS3D', 'GPS3D.toc')).read()
 gps3d_files = [l.strip().replace('\\', '/') for l in toc.splitlines() if l.strip() and not l.startswith('##')]
 ALT = os.environ.get('GPS3D_LUA')
+ALT_T = os.environ.get('TERRAIN_LUA')
 for addon, files in [('GnomishPositioningSystem', ['Data/MapTiles.lua', 'Core.lua', 'World.lua', 'MapWindow.lua']), ('GPS3D', gps3d_files)]:
     for f in files:
-        path = ALT if (ALT and addon == 'GPS3D' and f == 'GPS3D.lua') else f'{SITE}/addons/{addon}/{f}'
+        path = ALT if (ALT and addon == 'GPS3D' and f == 'GPS3D.lua') else ALT_T if (ALT_T and addon == 'GPS3D' and f == 'Terrain.lua') else f'{SITE}/addons/{addon}/{f}'
         ok = G.SANDBOX_LOAD(addon, f, open(path).read())
         if not ok: print('LOAD FAILED', addon, f)
     G.SANDBOX_LOADED(addon)
@@ -67,8 +72,13 @@ function TERRAIN.index()
   for _, t in ipairs(ns.stats.visible) do local m = t.mesh; if m and not m.detail then byTile[m.ty * 64 + m.tx] = m end end
   return byTile
 end
--- where a world point lies in a mesh: its triangle's three vertices and their weights
+-- where a world point lies in a mesh: its triangle's three vertices and their weights (Terrain.lua's
+-- DrawnAt goes down the tile's bintree; before 2026-10-22 the meshes were even grids, found by their step)
 local function locate(m, x, y)
+  if m.level then
+    local _, a, b, c, wa, wb, wc = ns.Lod.DrawnAt(m, x, y)
+    return a, b, c, wa, wb, wc
+  end
   local s, n = m.step, m.n
   local fi, fj = (x - m.tx * TILE) / (CELL * s), (-m.ty * TILE - y) / (CELL * s)
   local i, j = math.floor(fi), math.floor(fj)
@@ -167,6 +177,7 @@ function TERRAIN.farError(W, H)
   local n = 0
   for key, m in pairs(byTile) do
     local h = m.h
+    local sea = ns.OpenSeaTile(m.map, m.tx, m.ty) -- (drawn in one colour: no texture to misplace)
     local px, py, pd = {}, {}, {}
     for k = 1, #m.vx do px[k], py[k], pd[k] = project(m.vx[k], m.vy[k], m.vh[k]) end
     for j = 0, 32 do
@@ -182,10 +193,10 @@ function TERRAIN.farError(W, H)
             local ax, ay = px[a] * wa + px[b] * wb + px[c] * wc, py[a] * wa + py[b] * wb + py[c] * wc
             n = n + 1
             local w = (F / ed) ^ 2 -- pixels per square yard here (about): screen-area weight
-            list[n] = { math.sqrt((dx - ex) ^ 2 + (dy - ey) ^ 2), w, math.sqrt((ax - ex) ^ 2 + (ay - ey) ^ 2) }
+            list[n] = { math.sqrt((dx - ex) ^ 2 + (dy - ey) ^ 2), w, sea and 0 or math.sqrt((ax - ex) ^ 2 + (ay - ey) ^ 2) }
             wsum = wsum + w
             local tk = TERRAIN.tileErr
-            if tk then tk[key] = tk[key] or { 0, 0, m.step, ed, 0 }; local q = tk[key]; q[1] = q[1] + w * list[n][1]; q[2] = q[2] + w; q[5] = q[5] + 1; if ed < q[4] then q[4] = ed end end
+            if tk then tk[key] = tk[key] or { 0, 0, m.level or m.step, ed, 0 }; local q = tk[key]; q[1] = q[1] + w * list[n][1]; q[2] = q[2] + w; q[5] = q[5] + 1; if ed < q[4] then q[4] = ed end end
           end
         end
       end
@@ -214,17 +225,15 @@ function TERRAIN.seams()
   local worst, edges, mixed, morphing = 0, 0, 0, 0
   for key, m in pairs(byTile) do
     local moved = false
-    for j = 0, m.n do for i = 0, m.n do
-      local k = j * (m.n + 1) + i + 1
-      local own = m.g and m.g[k] or m.h[(j * m.step) * 33 + i * m.step + 1]
-      if math.abs(m.vh[k] - own) > 1e-6 then moved = true end
-    end end
+    for k = 1, #m.vx do
+      if math.abs(m.vh[k] - m.g[k]) > 1e-6 then moved = true end
+    end
     if moved then morphing = morphing + 1 end
     for side = 1, 2 do
       local e = byTile[key + (side == 1 and 1 or 64)]
       if e and (side == 1 and e.tx == m.tx + 1 and e.ty == m.ty or side == 2 and e.tx == m.tx and e.ty == m.ty + 1) then
         edges = edges + 1
-        if e.step ~= m.step then mixed = mixed + 1 end
+        if (e.level or e.step) ~= (m.level or m.step) then mixed = mixed + 1 end
         for k = 0, 128 do
           local x, y
           if side == 1 then x, y = (m.tx + 1) * TILE, -m.ty * TILE - k * TILE / 128
@@ -283,8 +292,10 @@ for place in PLACES:
               f'seams worst {sw:.1e} yd ({smorph} morphing tiles, {smixed} mixed-step edges sampled)')
 
 FAR = [('Hyjal 5,000 yd tilted 45', 1, 38.6, 21.8, 5000, 45, 30), ('Stormwind 3,000 yd tilted 45', 0, 30.8, 48.56, 3000, 45, 0),
-       ('Durotar 4,000 yd straight down', 1, 40.6, 30.6, 4000, 89.9, 0)]
+       ('Durotar 4,000 yd straight down', 1, 40.6, 30.6, 4000, 89.9, 0), ('Thousand Needles 4,000 yd tilted 45', 1, 38.0, 42.3, 4000, 45, 0),
+       ('Stranglethorn 4,000 yd tilted 45', 0, 30.0, 56.0, 4000, 45, 0)]
 FARR = []
+DUMP = []
 FB = [int(x) for x in os.environ['FAR_BUDGET'].split(',')] if os.environ.get('FAR_BUDGET') else None
 for fi, (name, m, gx, gy, dist, pitch, yaw) in enumerate(FAR):
     if FB: ns.SetGridBudget(FB[fi])
@@ -292,6 +303,15 @@ for fi, (name, m, gx, gy, dist, pitch, yaw) in enumerate(FAR):
     for _ in range(int(os.environ.get('TERRAIN_SETTLE', '80'))): ns.Render()  # (estimated errors replaced by the real ones)
     e = T.farError(W, H)
     tris = int(st.tris)
+    if os.environ.get('TERRAIN_DUMP'):  # the view and the tiles drawn, for the offline study (scripts/terrain_lod_study.py)
+        L.execute('''local ns = SANDBOX.namespaces.GPS3D
+local function findup(f, name) for i = 1, 200 do local n, v = debug.getupvalue(f, i); if not n then return end; if n == name then return v end end end
+local CT = findup(findup(ns.Render, 'RenderWorld'), 'ChooseTiles')
+DUMP_CANDS = findup(CT, 'cands')''')
+        basis = list(ns.CameraBasis())
+        tiles = [(int(G.DUMP_CANDS[i].tx), int(G.DUMP_CANDS[i].ty), int(G.DUMP_CANDS[i].level if G.DUMP_CANDS[i].level is not None else G.DUMP_CANDS[i].step)) for i in range(1, int(st.tiles) + 1) if G.DUMP_CANDS[i].grid]
+        DUMP.append({'name': name, 'map': m, 'F': float(ns.Focal()), 'W': W, 'H': H, 'basis': [float(b) for b in basis], 'tiles': tiles, 'tris': tris,
+                     'mean': float(e.mean), 'p95': float(e.p95)})
     ts = []
     L.execute('collectgarbage()')
     for k in range(40):
@@ -299,24 +319,48 @@ for fi, (name, m, gx, gy, dist, pitch, yaw) in enumerate(FAR):
     cam.yaw = yaw
     ts.sort()
     FARR.append((name, e, tris, ts[len(ts) // 2]))
+
     print(f'FAR {name:32s}: {tris} grid triangles (tau {float(st.tau or 0):.3g}), {int(st.tiles)} tiles; height error px mean {e.mean:.2f} p95 {e.p95:.2f} max {e.max:.1f}; '
           f'with the texture mapping mean {e.tmean:.2f} p95 {e.tp95:.2f}; render median {ts[len(ts) // 2]:.2f} ms ({int(e.n)} grid points); steps {dict(sorted((int(k), int(v)) for k, v in st.steps.items()))}')
 
+if os.environ.get('TERRAIN_DUMP'):
+    import json; json.dump(DUMP, open(os.environ['TERRAIN_DUMP'], 'w'))
 # hand-over: just short of 18,000 yd every tile at the coarsest step, as the planet view draws them
 view(1, 38.6, 21.8, 17900, 45, 30)
 for _ in range(3): ns.Render()
 handover = dict(sorted((int(k), int(v)) for k, v in st.steps.items()))
 
-# ---- checks (the thresholds are the gates of GATES-J1.md; the code before 2026-10-21 fails the first and third)
+# data: every tile with terrain has a string of levels, or is flat (Terrain.lua draws those as the even bintree)
+L.execute('''local ns = SANDBOX.namespaces.GPS3D
+LODCHECK = { tiles = 0, data = 0, flat = 0, bad = 0, maps = 0, all = 0 }
+for map, m in pairs(ns.World) do
+  LODCHECK.all = LODCHECK.all + 1
+  local d = ns.LodData and ns.LodData[map]
+  if d then LODCHECK.maps = LODCHECK.maps + 1 end
+  for key in pairs(m) do
+    LODCHECK.tiles = LODCHECK.tiles + 1
+    if d and d[key] then LODCHECK.data = LODCHECK.data + 1
+    else
+      local h = ns.TileHeights(map, key % 64, math.floor(key / 64))
+      if h and h.hi == h.lo then LODCHECK.flat = LODCHECK.flat + 1 else LODCHECK.bad = LODCHECK.bad + 1 end
+    end
+  end
+end''')
+LC = G.LODCHECK
+
+# ---- checks (since 2026-10-22 the thresholds are GATES-J8.md's: the code of 2026-10-21 (J1's even grids)
+# fails the first, third and fourth, the code before 2026-10-21 all but the second and the last)
 worst_px = max([z[2].max for z in ZOOM] or [0]); worst_p99 = max([z[2].p99 for z in ZOOM] or [0])
-if ZOOM: check('zooming slowly (2 % a frame, 14,000 to 30 yd, three places, tilted and straight down): no pops, the drawn ground at fixed points never moves more than 25 px from one frame to the next (before: up to 160 px), 99 % of the time under 2.5 px (before: up to 3.2)',
-      worst_px < 25 and worst_p99 < 2.5, f'worst {worst_px:.2f} px, p99 at most {worst_p99:.3f} px')
+if ZOOM: check('zooming slowly (2 % a frame, 14,000 to 30 yd, three places, tilted and straight down): no pops, the drawn ground at fixed points never moves more than 7 px from one frame to the next (2026-10-21: up to 14 px, before: up to 160 px), 99 % of the time under 0.9 px (2026-10-21: up to 1.3)',
+      worst_px < 7 and worst_p99 < 0.9, f'worst {worst_px:.2f} px, p99 at most {worst_p99:.3f} px')
 if ZOOM: check('no cracks while zooming: shared tile edges at the same heights from both sides, morphing tiles among them',
       max(z[5] for z in ZOOM) < 1e-3 and sum(z[6] for z in ZOOM) > 0 and sum(z[7] for z in ZOOM) > 0,
       f'worst {max(z[5] for z in ZOOM):.1e} yd, {sum(z[6] for z in ZOOM)} morphing tiles, {sum(z[7] for z in ZOOM)} edges between different steps')
 budget = int(G.GPS3D_DB.grid or 3200)
-FAR_MAX = {'Hyjal': 2.45, 'Stormwind': 2.4, 'Durotar': 1.29}  # (before: 2.62, 2.55, 1.30)
-check('far views within the ground budget, the height error on screen lower than before (mean under 2.45, 2.4 and 1.29 px; before 2.62, 2.55, 1.30)',
+FAR_MAX = {'Hyjal': 2.08, 'Stormwind': 1.9, 'Durotar': 1.06, 'Thousand': 1.98, 'Stranglethorn': 1.2}  # (2026-10-21: 2.17, 2.07, 1.16, 2.12, 1.31)
+check('far views within the ground budget, the height error on screen lower than with the even grids of 2026-10-21 (mean under 2.08, 1.9, 1.06, 1.98 and 1.2 px; those: 2.17, 2.07, 1.16, 2.12, 1.31; before 2026-10-21: 2.62, 2.55, 1.30 at the first three)',
       all(f[2] <= budget for f in FARR) and all(f[1].mean < FAR_MAX[f[0].split()[0]] for f in FARR), '; '.join(f'{f[0]}: {f[2]} tris, mean {f[1].mean:.2f} p95 {f[1].p95:.2f}' for f in FARR))
-check('hand-over: at 17,900 yd every tile at its coarsest step (the planet view draws tiles by their corners)', list(handover) == [32], str(handover))
+check("hand-over: at 17,900 yd every tile at its coarsest level, 2 triangles (the planet view draws tiles by their corners)", list(handover) == [2], str(handover))
+check('every tile with terrain has its levels (Data/Lod_<map>.lua) or is flat', LC.bad == 0 and LC.maps == LC.all and LC.data > 1000,
+      f'{int(LC.tiles)} tiles on {int(LC.maps)} maps: {int(LC.data)} with levels, {int(LC.flat)} flat, {int(LC.bad)} neither')
 print(f'{sum(ok for _, ok in results)} of {len(results)} checks passed')

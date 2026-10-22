@@ -139,6 +139,20 @@ function SEAMCHECK()
   for _, t in ipairs(ns.stats.visible) do local m = t.mesh; if m and not m.detail then byTile[m.ty * 64 + m.tx] = m end end
   local function heightAt(m, x, y)
     -- piecewise-linear along the mesh edge
+    if m.level then
+      -- (since 2026-10-22 the meshes are uneven, Terrain.lua: along a tile's edge the ground is straight
+      -- between the mesh's vertices on that edge, nearest below and above y)
+      local yb, hb, ya, ha = -math.huge, nil, math.huge, nil
+      for k = 1, #m.vx do
+        if math.abs(m.vx[k] - x) < 1e-3 then
+          local vy = m.vy[k]
+          if vy <= y + 1e-9 and vy > yb then yb, hb = vy, m.vh[k] end
+          if vy >= y - 1e-9 and vy < ya then ya, ha = vy, m.vh[k] end
+        end
+      end
+      if ya - yb < 1e-9 then return hb end
+      return hb + (ha - hb) * (y - yb) / (ya - yb)
+    end
     local s, n = m.step, m.n
     local x0, y0 = m.tx * 1600 / 3, -m.ty * 1600 / 3
     local cell = (1600 / 3) / 32 * s
