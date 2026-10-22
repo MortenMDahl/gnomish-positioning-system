@@ -12,6 +12,10 @@
 #   Cell.tga    one square of ground: a white outline (black edge) inset by 1/8 of the texture on each
 #               side. GPS3D bends four of these with SetVertexOffset into a 2x2 grid seen the way the
 #               camera sees the ground (turned with the view, in perspective when tilted).
+#   Probe.tga   the test picture of /gps3d probe (GPS3D's Probe.lua): a 4x4 checkerboard in two greys with
+#               a red diagonal from the upper left to the lower right (corners 1-4 of a texture) and a
+#               blue one from the lower left to the upper right (corners 2-3). Bent with one corner lifted,
+#               the diagonal the client folds the texture along stays straight and the other one kinks.
 # Drawn at 8x and scaled down for smooth edges. Usage: python scripts/make_media.py
 import os, struct
 from PIL import Image, ImageDraw
@@ -148,8 +152,21 @@ def globe():
         d.ellipse([c - m, c - R, c + m, c + R], outline=col, width=w)
     return outlined(draw, black=0.10, white=0.05)
 
+def probe():
+    img = Image.new('RGBA', (S, S), (0, 0, 0, 255))
+    d = ImageDraw.Draw(img)
+    q = S // 4
+    for i in range(4):
+        for j in range(4):
+            g = 200 if (i + j) % 2 == 0 else 90
+            d.rectangle([i * q, j * q, (i + 1) * q - 1, (j + 1) * q - 1], fill=(g, g, g, 255))
+    w = 5 * K
+    d.line([0, 0, S, S], fill=(230, 30, 30, 255), width=w)     # corners 1-4: upper left to lower right
+    d.line([0, S, S, 0], fill=(40, 90, 240, 255), width=w)     # corners 2-3: lower left to upper right
+    return img.resize((N, N), Image.LANCZOS)
+
 os.makedirs(MEDIA, exist_ok=True)
-for name, img in (('Needle', needle()), ('CamFollow', cam_follow()), ('CamBehind', cam_behind()), ('CamFree', cam_free()), ('Map', folded_map()), ('Cell', cell()), ('Globe', globe())):
+for name, img in (('Needle', needle()), ('CamFollow', cam_follow()), ('CamBehind', cam_behind()), ('CamFree', cam_free()), ('Map', folded_map()), ('Cell', cell()), ('Globe', globe()), ('Probe', probe())):
     write_tga(img, os.path.join(MEDIA, name + '.tga'))
     if os.path.isdir(SANDBOX_UI):
         img.save(os.path.join(SANDBOX_UI, 'media-' + name.lower() + '.png'))

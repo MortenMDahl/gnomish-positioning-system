@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: GPS 3D data: Kalimdor, buildings 3 of 3
+## Notes: Buildings of Kalimdor, tile rows 40 to 54 (part 3 of 3). Loaded by GPS 3D when its 3D view first needs it (load on demand).
+## Version: 0.5.0
+## X-License: MIT
+## LoadOnDemand: 1
+## Dependencies: GPS3D
+
+Link.lua
+Detail_1_3.lua

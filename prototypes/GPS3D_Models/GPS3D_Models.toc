@@ -1,0 +1,25 @@
+## Interface: 16001
+## Title: GPS 3D data: the game's models
+## Notes: Where the game's props, trees and buildings stand on every map (GPS 3D's models). Loaded by GPS 3D when its 3D view first needs it (load on demand).
+## Version: 0.5.0
+## X-License: MIT
+## LoadOnDemand: 1
+## Dependencies: GPS3D
+
+Link.lua
+Models_0.lua
+Models_1.lua
+Models_30.lua
+Models_33.lua
+Models_36.lua
+Models_47.lua
+Models_169.lua
+Models_209.lua
+Models_289.lua
+Models_309.lua
+Models_329.lua
+Models_469.lua
+Models_489.lua
+Models_509.lua
+Models_529.lua
+Models_531.lua

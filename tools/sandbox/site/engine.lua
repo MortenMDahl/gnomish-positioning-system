@@ -1000,7 +1000,48 @@ function hooksecurefunc(t, name, hook)
 end
 local function vec2(x, y) return { x = x, y = y, GetXY = function(v) return v.x, v.y end } end
 CreateVector2D = vec2
-C_AddOns.LoadAddOn = function() return true end
+-- Load-on-demand addons (since 2026-10-22: GPS3D's data, GPS3D_EK1 ... GPS3D_Models). C_AddOns.LoadAddOn(name)
+-- reads addons/<name>/<name>.toc and, if it says "## LoadOnDemand: 1", loads its dependencies, then its files in
+-- the TOC's order in the addon's own namespace (SANDBOX_LOAD), then fires ADDON_LOADED, as the game does. Files are
+-- read through SANDBOX_READFILE(addon, file) when the host sets it (the page: what it fetched at start), else
+-- from SANDBOX_SITE/addons, or site/addons or tools/sandbox/site/addons under the working directory (the Python
+-- tests). S.lodRefuse[name] = reason makes it answer nil, reason (a folder not copied, disabled, refused);
+-- S.lodLoads lists the names loaded, in order. Any other name not found: Blizzard_* answers true (the game's
+-- own, which MapWindow.lua may ask for), the rest nil, "MISSING".
+S.lodLoads, S.lodRefuse = {}, {}
+local function ReadAddonFile(addon, file)
+	if SANDBOX_READFILE then return SANDBOX_READFILE(addon, file) end
+	if not (io and io.open) then return nil end
+	for _, root in ipairs({ SANDBOX_SITE or "site", "site", "tools/sandbox/site" }) do
+		local f = io.open(root .. "/addons/" .. addon .. "/" .. file, "rb")
+		if f then local text = f:read("a"); f:close(); return text end
+	end
+end
+C_AddOns.LoadAddOn = function(name)
+	if S.loadedAddons[name] then return true end
+	if S.lodRefuse[name] then return nil, S.lodRefuse[name] end
+	local toc = ReadAddonFile(name, name .. ".toc")
+	if not toc then
+		if name:match("^Blizzard_") then return true end
+		return nil, "MISSING"
+	end
+	if not toc:match("\n## LoadOnDemand: 1") then return nil, "NOT_DEMAND_LOADED" end
+	for dep in (toc:match("## Dependencies: ([^\r\n]*)") or ""):gmatch("[^,%s]+") do
+		if not S.loadedAddons[dep] and not C_AddOns.LoadAddOn(dep) then return nil, "DEP_MISSING" end
+	end
+	for key, value in toc:gmatch("## (%w+): ([^\r\n]*)") do SANDBOX_ADDONMETA(name, key, value) end
+	for line in toc:gmatch("[^\r\n]+") do
+		if not line:match("^#") and line:match("%S") then
+			local file = line:gsub("\\", "/"):match("^%s*(.-)%s*$")
+			local src = ReadAddonFile(name, file)
+			if not src or not SANDBOX_LOAD(name, file, src) then return nil, "CORRUPT" end
+		end
+	end
+	S.lodLoads[#S.lodLoads + 1] = name
+	SANDBOX_LOADED(name)
+	return true
+end
+LoadAddOn = C_AddOns.LoadAddOn
 
 -- uiMaps, stand-ins for a few of the game's maps (not the game's data): name, parent, and for maps
 -- that lie in the world a box in world yards (top = north X, bottom, left = west Y, right) on a

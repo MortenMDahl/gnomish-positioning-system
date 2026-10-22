@@ -264,10 +264,24 @@ Copyright © 1994–2017 Lua.org, PUC-Rio.
 "use strict";
 (() => {
 const TILE = 1600 / 3;
+// The addons and their files in load order, from their TOCs (build.py writes this list from site/addons/*/*.toc).
+// lod: a load-on-demand addon (GPS3D's data since 2026-10-22): fetched with the rest, run only when an addon
+// asks for it (C_AddOns.LoadAddOn in engine.lua, which reads its files through SANDBOX_READFILE below).
+// ADDONS-BEGIN
 const ADDONS = [
-  { name: "GnomishPositioningSystem", files: ["Data/MapTiles.lua", "Debug.lua", "Core.lua", "World.lua", "MapWindow.lua", "Quests.lua", "Compat.lua", "MapKey.lua", "Settings.lua"], saved: "GnomishPositioningSystemDB,GnomishPositioningSystemLog" },
-  { name: "GPS3D", files: ["Data/World_0.lua", "Data/World_1.lua", "Data/World_30.lua", "Data/World_33.lua", "Data/World_36.lua", "Data/World_47.lua", "Data/World_169.lua", "Data/World_209.lua", "Data/World_289.lua", "Data/World_309.lua", "Data/World_329.lua", "Data/World_469.lua", "Data/World_489.lua", "Data/World_509.lua", "Data/World_529.lua", "Data/World_531.lua", "Data/Detail_0_1.lua", "Data/Detail_0_2.lua", "Data/Detail_0_3.lua", "Data/Detail_0_4.lua", "Data/Detail_1_1.lua", "Data/Detail_1_2.lua", "Data/Detail_1_3.lua", "Data/Detail_30.lua", "Data/Detail_33.lua", "Data/Detail_36.lua", "Data/Detail_47.lua", "Data/Detail_209.lua", "Data/Detail_289.lua", "Data/Detail_309.lua", "Data/Detail_329.lua", "Data/Detail_469.lua", "Data/Detail_489.lua", "Data/Detail_509.lua", "Data/Detail_529.lua", "Data/Detail_531.lua", "Data/Models_0.lua", "Data/Models_1.lua", "Data/Models_30.lua", "Data/Models_33.lua", "Data/Models_36.lua", "Data/Models_47.lua", "Data/Models_169.lua", "Data/Models_209.lua", "Data/Models_289.lua", "Data/Models_309.lua", "Data/Models_329.lua", "Data/Models_469.lua", "Data/Models_489.lua", "Data/Models_509.lua", "Data/Models_529.lua", "Data/Models_531.lua", "Data/Globe.lua", "Data/Lod_0.lua", "Data/Lod_1.lua", "Data/Lod_30.lua", "Data/Lod_33.lua", "Data/Lod_36.lua", "Data/Lod_47.lua", "Data/Lod_169.lua", "Data/Lod_209.lua", "Data/Lod_289.lua", "Data/Lod_309.lua", "Data/Lod_329.lua", "Data/Lod_469.lua", "Data/Lod_489.lua", "Data/Lod_509.lua", "Data/Lod_529.lua", "Data/Lod_531.lua", "GPS3D.lua", "Terrain.lua", "Models.lua", "Globe.lua", "QuestAreas.lua"], saved: "GPS3D_DB" },
+  {"name": "GnomishPositioningSystem", "files": ["Data/MapTiles.lua", "Debug.lua", "Core.lua", "World.lua", "MapWindow.lua", "Quests.lua", "Compat.lua", "MapKey.lua", "Settings.lua"], "saved": "GnomishPositioningSystemDB,GnomishPositioningSystemLog"},
+  {"name": "GPS3D", "files": ["Data/World_0.lua", "Data/World_1.lua", "Data/World_30.lua", "Data/World_33.lua", "Data/World_36.lua", "Data/World_47.lua", "Data/World_169.lua", "Data/World_209.lua", "Data/World_289.lua", "Data/World_309.lua", "Data/World_329.lua", "Data/World_469.lua", "Data/World_489.lua", "Data/World_509.lua", "Data/World_529.lua", "Data/World_531.lua", "Data/DetailParts.lua", "Data/Globe.lua", "Data/Lod_0.lua", "Data/Lod_1.lua", "Data/Lod_30.lua", "Data/Lod_33.lua", "Data/Lod_36.lua", "Data/Lod_47.lua", "Data/Lod_169.lua", "Data/Lod_209.lua", "Data/Lod_289.lua", "Data/Lod_309.lua", "Data/Lod_329.lua", "Data/Lod_469.lua", "Data/Lod_489.lua", "Data/Lod_509.lua", "Data/Lod_529.lua", "Data/Lod_531.lua", "GPS3D.lua", "Terrain.lua", "Models.lua", "Globe.lua", "QuestAreas.lua", "OnDemand.lua", "Probe.lua"], "saved": "GPS3D_DB"},
+  {"name": "GPS3D_EK1", "files": ["Link.lua", "Detail_0_1.lua"], "lod": true},
+  {"name": "GPS3D_EK2", "files": ["Link.lua", "Detail_0_2.lua"], "lod": true},
+  {"name": "GPS3D_EK3", "files": ["Link.lua", "Detail_0_3.lua"], "lod": true},
+  {"name": "GPS3D_EK4", "files": ["Link.lua", "Detail_0_4.lua"], "lod": true},
+  {"name": "GPS3D_Instances", "files": ["Link.lua", "Detail_30.lua", "Detail_33.lua", "Detail_36.lua", "Detail_47.lua", "Detail_209.lua", "Detail_289.lua", "Detail_309.lua", "Detail_329.lua", "Detail_469.lua", "Detail_489.lua", "Detail_509.lua", "Detail_529.lua", "Detail_531.lua"], "lod": true},
+  {"name": "GPS3D_Kalimdor1", "files": ["Link.lua", "Detail_1_1.lua"], "lod": true},
+  {"name": "GPS3D_Kalimdor2", "files": ["Link.lua", "Detail_1_2.lua"], "lod": true},
+  {"name": "GPS3D_Kalimdor3", "files": ["Link.lua", "Detail_1_3.lua"], "lod": true},
+  {"name": "GPS3D_Models", "files": ["Link.lua", "Models_0.lua", "Models_1.lua", "Models_30.lua", "Models_33.lua", "Models_36.lua", "Models_47.lua", "Models_169.lua", "Models_209.lua", "Models_289.lua", "Models_309.lua", "Models_329.lua", "Models_469.lua", "Models_489.lua", "Models_509.lua", "Models_529.lua", "Models_531.lua"], "lod": true},
 ];
+// ADDONS-END
 const STORE_KEY = "gps-sandbox-saved-v1";
 const $ = (id) => document.getElementById(id);
 const canvas = $("gl"), screen = $("screen"), logEl = $("log");
@@ -890,7 +904,7 @@ let savedText = "";
 try { savedText = localStorage.getItem(STORE_KEY) || ""; } catch (e) {}
 function save() {
   if (!lua) return;
-  try { savedText = lua.call("SANDBOX_SAVE", ADDONS.map((a) => a.saved).join(",")) || ""; localStorage.setItem(STORE_KEY, savedText); } catch (e) {}
+  try { savedText = lua.call("SANDBOX_SAVE", ADDONS.filter((a) => a.saved).map((a) => a.saved).join(",")) || ""; localStorage.setItem(STORE_KEY, savedText); } catch (e) {}
 }
 window.addEventListener("pagehide", save);
 setInterval(save, 5000);
@@ -906,8 +920,11 @@ async function boot(reset) {
   lua.run(sources["engine.lua"], "engine.lua");
   lua.run(sources["zones.lua"], "zones.lua"); // every zone of the two continents (make_zones.py)
   // the TOC fields addons read (GetAddOnMetadata: Version, Title)
-  for (const a of ADDONS) for (const m of sources[`addons/${a.name}/${a.name}.toc`].matchAll(/^## (\w+): (.*)$/gm)) lua.call("SANDBOX_ADDONMETA", a.name, m[1], m[2].trim());
+  for (const a of ADDONS) if (!a.lod) for (const m of sources[`addons/${a.name}/${a.name}.toc`].matchAll(/^## (\w+): (.*)$/gm)) lua.call("SANDBOX_ADDONMETA", a.name, m[1], m[2].trim());
+  // load-on-demand addons: the engine reads their TOC and files from what was fetched at start
+  lua.setFn("SANDBOX_READFILE", (addon, file) => sources[`addons/${addon}/${file}`] ?? null);
   for (const a of ADDONS) {
+    if (a.lod) continue;
     for (const f of a.files) {
       const ok = lua.call("SANDBOX_LOAD", a.name, f, sources[`addons/${a.name}/${f}`]);
       if (!ok) sys(`${a.name}/${f} failed to load (see the error above)`);
@@ -944,10 +961,10 @@ async function boot(reset) {
   // building check as a game that refuses them: the simplified building shapes stay. The "game loads
   // WMOs" button tries the other answer. The check runs again at every page load.
   lua.run("SANDBOX_WMO = false; if GPS3D_DB then GPS3D_DB.wmoCheck, GPS3D_DB.wmoBuild = nil, nil end", "wmo");
-  for (const a of ADDONS) lua.call("SANDBOX_LOADED", a.name);
+  for (const a of ADDONS) if (!a.lod) lua.call("SANDBOX_LOADED", a.name);
   lua.call("SANDBOX_FIRE", "PLAYER_LOGIN");
   lua.call("SANDBOX_FIRE", "PLAYER_ENTERING_WORLD", true, false);
-  sys(`Lua ready: ${lua.kind}, both addons loaded in ${Math.round(performance.now() - t0)} ms.`);
+  sys(`Lua ready: ${lua.kind}, both addons loaded in ${Math.round(performance.now() - t0)} ms (GPS3D's building and model data load when the 3D view needs them).`);
   runLua(`if not (GPS_MapFrame:IsShown() or (GPS3D_Frame and GPS3D_Frame:IsShown()) or (GPS_WorldMapFrame and GPS_WorldMapFrame:IsShown())) then GPS_Toggle() end`);
   $("boot").hidden = true;
   running = true;

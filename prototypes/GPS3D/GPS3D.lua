@@ -361,8 +361,13 @@ local pool, poolN, poolMade = {}, 0, 0
 for f = 1, BUCKET_FRAMES do pool[f] = { n = 0 } end
 -- (and the ground's triangle tables, given back with their meshes and used again (BuildGridMesh): the
 -- uneven meshes change level twice as often as the even grids did, and a new table per triangle was a
--- third more garbage while zooming)
-pool.tris = { n = 0 }
+-- third more garbage while zooming); since 2026-10-22 (perf round A2) the building blocks' triangle tables too,
+-- a released block mesh's arrays (pool.sets: its px, py, pd and tris, BuildBlockMesh) and the arrays of a
+-- decoded block the cache has forgotten (pool.geo: vx, vy, vh, BlockGeo). Running 20 yd a frame round
+-- Stormwind a frame that makes blocks allocated 142 KB of Lua, most of it a table per new triangle; now 29 KB
+-- (sandbox, median; tools/sandbox/test_blockbuild.py). pool.rest: the one set of arrays a block's triangle
+-- corners, vertex colours and palette are decoded into to make its mesh (A4, BlockTris)
+pool.tris, pool.sets, pool.geo, pool.rest = { n = 0 }, { n = 0 }, { n = 0 }, { idx = {}, vc = {}, pal = { spare = {} } }
 local function AcquireTex(f)
 	local tex
 	if poolN > 0 then
@@ -473,12 +478,21 @@ end
 local function ReleaseMesh(key)
 	local m = meshes[key]
 	if not m then return end
-	local free = m.g and pool.tris -- (grid meshes: their triangle tables too)
+	local free = pool.tris -- (their triangle tables too: grid meshes since J8, building blocks since A2)
 	for _, t in ipairs(m.tris) do
 		t.shown = false; ReleaseTex(t.tex)
-		if free then t.tex, t.mesh = nil, nil; free.n = free.n + 1; free[free.n] = t end
+		t.tex, t.mesh = nil, nil; free.n = free.n + 1; free[free.n] = t
 	end
 	meshes[key] = nil
+	local g = m.geo
+	if g then
+		-- a building block: its arrays for the next block mesh, and the decoded block's arrays once the cache
+		-- has forgotten it (BlockGeo; kept until now because this mesh drew its vertices)
+		local s = pool.sets
+		s.n = s.n + 1; s[s.n] = m
+		g.mesh = nil
+		if g.dropped then s = pool.geo; s.n = s.n + 1; s[s.n] = g end
+	end
 end
 
 ------------------------------------------------------------------------------------------------
@@ -511,6 +525,10 @@ local function TileBlocks(map, tx, ty, level)
 	if b ~= nil then return b or nil end
 	local m = ns[LEVEL_DATA[level]][map]
 	local s = m and m[ty * 64 + tx]
+	if not s and ns.DetailFor and ns.DetailFor(map, ty * 64 + tx) then -- (its data addon loaded just now: OnDemand.lua)
+		m = ns[LEVEL_DATA[level]][map]
+		s = m and m[ty * 64 + tx]
+	end
 	if not s or s:sub(1, 2) ~= "D2" then blockIndex[ck] = false return nil end
 	local nts = {} -- block index -> triangle count (known without decoding the block)
 	b = { s = s, n = 0, nt = nts }
@@ -528,7 +546,12 @@ local function TileBlocks(map, tx, ty, level)
 end
 ns.TileBlocks = TileBlocks
 
--- Decoded block: vertices (world x, y, h, colour index), palette, triangle corners (1-based).
+-- Decoded block: vertices (world x, y, h) and where the block is in its string (s, p). Since 2026-10-22 (perf
+-- round A4) the cache keeps only what the meshes draw every frame; the triangle corners, the vertex colours and the
+-- palette are decoded again from the string when a mesh is made (BlockTris, into pool.rest) and, for heights, kept
+-- for the few blocks under the camera (BlockHeight). In Stormwind and Orgrimmar (330 yd, following you) the cache
+-- held 11.3 and 11.9 MB of Lua with them (306 and 371 blocks, heights included), now 5.3 and 4.9 MB (sandbox, Lua
+-- 5.4; tools/sandbox/test_blockmem.py).
 local geoCache, geoCount, geoClock = {}, 0, 0
 local function BlockGeo(map, tx, ty, bi, level)
 	level = level or 1
@@ -543,15 +566,20 @@ local function BlockGeo(map, tx, ty, bi, level)
 	local base = (Num(s, pos + 1, 3) - 131072) * 0.25
 	local nv, nt, np = Num(s, pos + 4, 3), Num(s, pos + 7, 3), Num(s, pos + 10, 1)
 	local p = pos + 11
-	local pal = {}
-	for k = 1, np do
-		local r, gg, b = s:byte(p, p + 2)
-		pal[k] = { B64[r] / 63, B64[gg] / 63, B64[b] / 63 }
-		p = p + 3
+	-- the arrays of a block the cache forgot, if any (pool.geo; their old lengths cleared below)
+	local old = pool.geo
+	local vx, vy, vh
+	if old.n > 0 then
+		local o = old[old.n]
+		old[old.n], old.n = nil, old.n - 1
+		vx, vy, vh = o.vx, o.vy, o.vh
+		for k = nv + 1, o.nv do vx[k], vy[k], vh[k] = nil, nil, nil end
+	else
+		vx, vy, vh = {}, {}, {}
 	end
+	p = p + np * 3 -- (the palette: BlockTris)
 	local x0 = tx * TILE + (bi % BLOCKS) * BLOCK         -- north-west corner of the block
 	local y0 = -ty * TILE - floor(bi / BLOCKS) * BLOCK
-	local vx, vy, vh, vc = {}, {}, {}, {}
 	local lo, hi = math.huge, -math.huge
 	for k = 1, nv do
 		local c1, c2, c3, c4, c5, c6 = s:byte(p, p + 5)
@@ -565,74 +593,164 @@ local function BlockGeo(map, tx, ty, bi, level)
 		vy[k] = y0 - sy * STEP
 		local h = base + dh * 0.25
 		vh[k] = h
-		vc[k] = col
 		if h < lo then lo = h end
 		if h > hi then hi = h end
 		p = p + 6
 	end
-	local idx = {}
-	if nv > 4095 then
-		for k = 1, nt * 3 do
-			local a, b, c = s:byte(p, p + 2)
-			idx[k] = (B64[a] * 64 + B64[b]) * 64 + B64[c] + 1
-			p = p + 3
-		end
-	else
-		for k = 1, nt * 3 do
-			local a, b = s:byte(p, p + 1)
-			idx[k] = B64[a] * 64 + B64[b] + 1
-			p = p + 2
-		end
-	end
-	g = { key = key, map = map, tx = tx, ty = ty, bi = bi, level = level, x0 = x0, y0 = y0, vx = vx, vy = vy, vh = vh, vc = vc,
-		pal = pal, idx = idx, nt = nt, lo = lo, hi = hi, used = geoClock }
+	g = { key = key, map = map, tx = tx, ty = ty, bi = bi, level = level, x0 = x0, y0 = y0, vx = vx, vy = vy, vh = vh,
+		s = s, p = pos, nv = nv, nt = nt, np = np, lo = lo, hi = hi, used = geoClock }
 	geoCache[key] = g
 	geoCount = geoCount + 1
 	if geoCount > GEO_LIMIT then -- forget the least recently used quarter
 		local list = {}
 		for k2, g2 in pairs(geoCache) do list[#list + 1] = g2 end
 		table.sort(list, function(a, b) return a.used < b.used end)
-		for i = 1, floor(#list / 4) do geoCache[list[i].key] = nil; geoCount = geoCount - 1 end
+		for i = 1, floor(#list / 4) do
+			local o = list[i]
+			geoCache[o.key] = nil; geoCount = geoCount - 1
+			-- its arrays used again by the next block decoded; while a mesh still draws its vertices, once that
+			-- mesh is given back (ReleaseMesh)
+			if o.mesh then o.dropped = true else old.n = old.n + 1; old[old.n] = o end
+		end
 	end
 	return g
 end
 ns.BlockGeo = BlockGeo
 
--- Height of a block's surface at (x, y), or nil outside it (triangles found through an 8 x 8 grid)
-local function BlockHeight(g, x, y)
-	local cs = BLOCK / 8
-	local vx, vy, vh, idx = g.vx, g.vy, g.vh, g.idx
-	if not g.cells then
-		local cells = {}
-		for q = 0, 63 do cells[q] = {} end
-		for k = 1, g.nt do
-			local a, b, c = idx[k * 3 - 2], idx[k * 3 - 1], idx[k * 3]
-			local c0 = max(0, floor((min(vx[a], vx[b], vx[c]) - g.x0) / cs))
-			local c1 = min(7, floor((max(vx[a], vx[b], vx[c]) - g.x0) / cs))
-			local r0 = max(0, floor((g.y0 - max(vy[a], vy[b], vy[c])) / cs))
-			local r1 = min(7, floor((g.y0 - min(vy[a], vy[b], vy[c])) / cs))
-			for r = r0, r1 do for col = c0, c1 do local list = cells[r * 8 + col]; list[#list + 1] = k end end
+-- Height of a block's surface at (x, y), or nil outside it (triangles found through an 8 x 8 grid). Since
+-- 2026-10-22 (perf round A4) the triangle corners and the grid are kept here, for the last HOLD blocks asked (the
+-- camera's lift and the view ahead, your height, the quest areas' corners), not with every decoded block: a block
+-- asked again after that is decoded again from its string (hold.decodes counts them; up to 2.5 ms for a city block).
+-- Walking or running through Stormwind and Orgrimmar (330 yd tilted 45, 40 yd tilted 20) the camera and your arrow
+-- ask at most 2 blocks a frame and decode one at most once in 300 frames; flying 20 yd a frame three laps round the
+-- same blocks (more than HOLD a lap) costs 0.2 ms a frame on average (sandbox, test_blockmem.py, test_blockbuild.py).
+local BlockHeight
+do
+	local hold, clock = { HOLD = 16, decodes = 0, span = {} }, 0
+	ns.blockHold = hold
+	-- A decoded block's triangle corners (idx, 1-based), vertex colours (vc) and palette (pal) from its string, into
+	-- the arrays given (nil: that part not decoded; entries past the block's own cleared). BuildBlockMesh, BlockHeight.
+	local function BlockTris(g, idx, vc, pal)
+		local s, p, nv, nt, np = g.s, g.p + 11, g.nv, g.nt, g.np
+		if pal then
+			local spare = pal.spare -- (pool.rest's: colour tables past the last block's own, kept for the next; no garbage)
+			for k = 1, np do
+				local r, gg, b = s:byte(p, p + 2)
+				local c = pal[k]
+				if not c then
+					local n = spare and #spare or 0
+					if n > 0 then c = spare[n]; spare[n] = nil else c = {} end
+					pal[k] = c
+				end
+				c[1], c[2], c[3] = B64[r] / 63, B64[gg] / 63, B64[b] / 63
+				p = p + 3
+			end
+			for k = np + 1, #pal do
+				if spare then spare[#spare + 1] = pal[k] end
+				pal[k] = nil
+			end
+		else
+			p = p + np * 3
 		end
-		g.cells = cells
+		if vc then
+			for k = 1, nv do vc[k] = B64[s:byte(p + 5)]; p = p + 6 end -- (the colour: a vertex's last character)
+			for k = nv + 1, #vc do vc[k] = nil end
+		else
+			p = p + nv * 6
+		end
+		if idx then
+			if nv > 4095 then
+				for k = 1, nt * 3 do
+					local a, b, c = s:byte(p, p + 2)
+					idx[k] = (B64[a] * 64 + B64[b]) * 64 + B64[c] + 1
+					p = p + 3
+				end
+			else
+				for k = 1, nt * 3 do
+					local a, b = s:byte(p, p + 1)
+					idx[k] = B64[a] * 64 + B64[b] + 1
+					p = p + 2
+				end
+			end
+			for k = nt * 3 + 1, #idx do idx[k] = nil end
+		end
+		return idx, vc, pal
 	end
-	local col, row = floor((x - g.x0) / cs), floor((g.y0 - y) / cs)
-	if col < 0 or col > 7 or row < 0 or row > 7 then return nil end
-	local best
-	for _, k in ipairs(g.cells[row * 8 + col]) do
-		local a, b, c = idx[k * 3 - 2], idx[k * 3 - 1], idx[k * 3]
-		local ax, ay, bx, by, cx, cy = vx[a], vy[a], vx[b], vy[b], vx[c], vy[c]
-		local den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
-		if den ~= 0 then
-			local w1 = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) / den
-			local w2 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / den
-			local w3 = 1 - w1 - w2
-			if w1 >= -1e-6 and w2 >= -1e-6 and w3 >= -1e-6 then
-				local h = w1 * vh[a] + w2 * vh[b] + w3 * vh[c]
-				if not best or h > best then best = h end
+	ns.BlockTris = BlockTris
+
+	function BlockHeight(g, x, y)
+		local cs = BLOCK / 8
+		local vx, vy, vh = g.vx, g.vy, g.vh
+		local e = g.hold
+		if not (e and e.key == g.key) then
+			-- this block's corners and grid if held, else decoded into the least recently asked block's (or new) arrays
+			local key, oldest = g.key, nil
+			e = nil
+			for i = 1, #hold do
+				local o = hold[i]
+				if o.key == key then e = o break end
+				if not oldest or o.used < oldest.used then oldest = o end
+			end
+			if not e then
+				if #hold < hold.HOLD then
+					e = { idx = {}, at = {}, list = {} }
+					hold[#hold + 1] = e
+				else
+					e = oldest
+				end
+				e.key, e.map, e.tx, e.ty, e.bi = key, g.map, g.tx, g.ty, g.bi
+				hold.decodes = hold.decodes + 1
+				-- the grid: cell q's triangles (by number, in order) are list[at[q]] to list[at[q + 1] - 1], counted
+				-- first, then placed (one array per block, not one per cell: arrays used again keep their size)
+				local at, list, span, idx = e.at, e.list, hold.span, BlockTris(g, e.idx)
+				for q = 0, 64 do at[q] = 0 end
+				for k = 1, g.nt do -- each triangle's cells (its box's columns and rows, kept in span), counted
+					local a, b, c = idx[k * 3 - 2], idx[k * 3 - 1], idx[k * 3]
+					local c0 = max(0, floor((min(vx[a], vx[b], vx[c]) - g.x0) / cs))
+					local c1 = min(7, floor((max(vx[a], vx[b], vx[c]) - g.x0) / cs))
+					local r0 = max(0, floor((g.y0 - max(vy[a], vy[b], vy[c])) / cs))
+					local r1 = min(7, floor((g.y0 - min(vy[a], vy[b], vy[c])) / cs))
+					span[k] = ((r1 * 8 + r0) * 8 + c1) * 8 + c0
+					for r = r0, r1 do for col = c0, c1 do local q = r * 8 + col; at[q] = at[q] + 1 end end
+				end
+				local n = 1 -- counts to where each cell starts
+				for q = 0, 64 do local cnt = at[q]; at[q] = n; n = n + cnt end
+				for k = 1, g.nt do -- placed
+					local v = span[k]
+					local c0 = v % 8; v = (v - c0) / 8
+					local c1 = v % 8; v = (v - c1) / 8
+					local r0 = v % 8
+					for r = r0, (v - r0) / 8 do for col = c0, c1 do local q = r * 8 + col; list[at[q]] = k; at[q] = at[q] + 1 end end
+				end
+				for q = 64, 1, -1 do at[q] = at[q - 1] end -- (each at[q] was where the next cell starts)
+				at[0] = 1
+			end
+			g.hold = e
+		end
+		clock = clock + 1
+		e.used = clock
+		local col, row = floor((x - g.x0) / cs), floor((g.y0 - y) / cs)
+		if col < 0 or col > 7 or row < 0 or row > 7 then return nil end
+		local best
+		local idx, list, at = e.idx, e.list, e.at
+		local q = row * 8 + col
+		for i = at[q], at[q + 1] - 1 do
+			local k = list[i]
+			local a, b, c = idx[k * 3 - 2], idx[k * 3 - 1], idx[k * 3]
+			local ax, ay, bx, by, cx, cy = vx[a], vy[a], vx[b], vy[b], vx[c], vy[c]
+			local den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+			if den ~= 0 then
+				local w1 = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) / den
+				local w2 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / den
+				local w3 = 1 - w1 - w2
+				if w1 >= -1e-6 and w2 >= -1e-6 and w3 >= -1e-6 then
+					local h = w1 * vh[a] + w2 * vh[b] + w3 * vh[c]
+					if not best or h > best then best = h end
+				end
 			end
 		end
+		return best
 	end
-	return best
 end
 
 -- A block's triangles as textures: walls (steep, by a building's vertex) flat-coloured and shaded,
@@ -644,20 +762,44 @@ local function BuildBlockMesh(g)
 	local au, av, aw, ah = 0, 0, 1, 1
 	if not file then file, au, av, aw, ah = OverviewOf(g.map, g.tx, g.ty) end
 	local tx0, ty0 = g.tx * TILE, -g.ty * TILE
-	local vx, vy, vh, vc, pal, idx = g.vx, g.vy, g.vh, g.vc, g.pal, g.idx
-	local tris, walls = {}, 0
-	local mesh = { detail = true, map = g.map, tx = g.tx, ty = g.ty, bi = g.bi, vx = vx, vy = vy, vh = vh, tris = tris, walls = walls, px = {}, py = {}, pd = {} }
+	local vx, vy, vh = g.vx, g.vy, g.vh
+	local rest = pool.rest -- (the corners, colours and palette decoded again from the block's string: BlockTris)
+	local idx, vc, pal = ns.BlockTris(g, rest.idx, rest.vc, rest.pal)
+	local nt, walls = g.nt, 0
+	-- arrays of a mesh given back (pool.sets), else new; the screen positions emptied so the first frame
+	-- projects every vertex afresh, as in a new mesh
+	local sets, tris, px, py, pd = pool.sets, nil, nil, nil, nil
+	if sets.n > 0 then
+		local o = sets[sets.n]
+		sets[sets.n], sets.n = nil, sets.n - 1
+		tris, px, py, pd = o.tris, o.px, o.py, o.pd
+		for k = 1, o.nv do px[k], py[k] = nil, nil end
+		for k = nt + 1, #tris do tris[k] = nil end
+	else
+		tris, px, py, pd = {}, {}, {}, {}
+	end
+	local mesh = { detail = true, map = g.map, tx = g.tx, ty = g.ty, bi = g.bi, vx = vx, vy = vy, vh = vh, tris = tris, walls = walls, px = px, py = py, pd = pd, geo = g, nv = g.nv }
+	g.mesh = mesh
 	local uScale, vScale = aw / TILE, ah / TILE
 	local s1, s2, s3 = SUN[1], SUN[2], SUN[3]
 	local coarse = g.level > 1
-	for k = 1, g.nt do
+	local free = pool.tris
+	for k = 1, nt do
 		local a, b, c = idx[k * 3 - 2], idx[k * 3 - 1], idx[k * 3]
 		local ex1, eh1, ez1 = vx[b] - vx[a], vh[b] - vh[a], -(vy[b] - vy[a])
 		local ex2, eh2, ez2 = vx[c] - vx[a], vh[c] - vh[a], -(vy[c] - vy[a])
 		local nx, nh, nz = eh1 * ez2 - ez1 * eh2, ez1 * ex2 - ex1 * ez2, ex1 * eh2 - eh1 * ex2
 		local l = sqrt(nx * nx + nh * nh + nz * nz)
 		if l > 0 then nx, nh, nz = nx / l, nh / l, nz / l end
-		local t = { a = a, b = b, c = c, tex = AcquireTex(), bucket = -1, frame = 1, shown = false, mesh = mesh }
+		local t, nf = nil, free.n
+		if nf > 0 then -- (a triangle table given back, ground or building: every field it may hold set again)
+			t = free[nf]
+			free[nf], free.n = nil, nf - 1
+			t.a, t.b, t.c, t.tex, t.bucket, t.frame, t.shown, t.mesh, t.clipped, t.blk = a, b, c, AcquireTex(), -1, 1, false, mesh, nil, nil
+			t.x1, t.y1, t.x2, t.y2, t.x3, t.y3 = nil, nil, nil, nil, nil, nil
+		else
+			t = { a = a, b = b, c = c, tex = AcquireTex(), bucket = -1, frame = 1, shown = false, mesh = mesh }
+		end
 		-- a wall: steep, and its highest corner is on a wall (has a colour); steep roofs show the minimap. In the
 		-- coarser levels (samples 4.2 and 8.3 yd apart) a wall's top corner often lands on the roof: there any
 		-- coloured corner counts, and a steep triangle with none is its top corner's colour of the minimap,
@@ -716,8 +858,10 @@ local function GroundHeight(map, x, y)
 end
 ns.GroundHeight = function(x, y, map) return GroundHeight(map or ns.cam.map, x, y) end
 
--- Highest point of a tile, ground and buildings (0 where there is no terrain), read once from the block
--- strings without decoding them: lets the camera skip its ground checks when it is clearly above it all.
+-- Highest point of a tile, ground and buildings (0 where there is no terrain): lets the camera skip its ground
+-- checks when it is clearly above it all. The buildings' highest point comes from their index (Data/DetailParts.lua,
+-- since 2026-10-22: worked out offline from the block strings exactly as this function did, per block its base
+-- raised by its highest vertex), so it is known without loading the tile's data addon (OnDemand.lua).
 local tileTop = {}
 local function TileTop(map, tx, ty)
 	local ck = map * 4096 + ty * 64 + tx
@@ -725,26 +869,9 @@ local function TileTop(map, tx, ty)
 	if top then return top end
 	local h = TileHeights(map, tx, ty)
 	top = h and h.hi or 0
-	local tb = useDetail and TileBlocks(map, tx, ty)
-	if tb then
-		local str = tb.s
-		for bi = 0, BLOCKS * BLOCKS - 1 do
-			local pos = tb[bi]
-			if pos then
-				local base = (Num(str, pos + 1, 3) - 131072) * 0.25
-				local nv, np = Num(str, pos + 4, 3), Num(str, pos + 10, 1)
-				local p, best = pos + 11 + np * 3, 0
-				for _ = 1, nv do
-					-- a vertex is x 7 bits | y 7 | height above base 16 | colour 6 in 6 characters
-					local c3, c4, c5 = str:byte(p + 2, p + 4)
-					local dh = (B64[c3] % 16) * 4096 + B64[c4] * 64 + B64[c5]
-					if dh > best then best = dh end
-					p = p + 6
-				end
-				if base + best * 0.25 > top then top = base + best * 0.25 end
-			end
-		end
-	end
+	local parts = useDetail and ns.DetailParts and ns.DetailParts[map]
+	local bt = parts and tx >= 0 and tx < 64 and ty >= 0 and ty < 64 and parts.tops[ty * 64 + tx]
+	if bt and bt > top then top = bt end
 	tileTop[ck] = top
 	return top
 end
@@ -905,7 +1032,11 @@ local function Lift()
 		k.lift = nil -- the target, worked out when asked (LiftTarget)
 		local yr, p = rad(cam.yaw), rad(pitch)
 		local cp = cos(p)
-		k.floor = max(0, GroundHeight(cam.map, cam.x - sin(yr) * cp * cam.dist, cam.y - cos(yr) * cp * cam.dist) + k.GAP - cam.th - sin(p) * cam.dist)
+		local gx, gy = cam.x - sin(yr) * cp * cam.dist, cam.y - cos(yr) * cp * cam.dist
+		-- (the ground there is read only when its tile's highest point could hold the camera up: the same floor, and
+		-- far out the buildings under the camera need not be loaded, OnDemand.lua)
+		local tt = TileTop(cam.map, floor(gx / TILE), floor(-gy / TILE)) + k.GAP - cam.th - sin(p) * cam.dist
+		k.floor = tt <= 0 and 0 or max(0, GroundHeight(cam.map, gx, gy) + k.GAP - cam.th - sin(p) * cam.dist)
 		if k.drawn < k.floor then k.drawn, k.vel = k.floor, 0 end -- (at once; the ease goes on from there, at rest)
 	end
 	return k.drawn
@@ -936,6 +1067,16 @@ end
 -- straight to the target: the view was put somewhere new (opened, another map)
 function ns.SnapLift() liftKey.drawn, liftKey.vel = ns.LiftTarget(), 0 end
 local function ForgetLift() liftKey.map = nil; wipe(tileTop) end -- the ground changed (buildings switched on/off)
+-- A data addon with buildings has loaded (OnDemand.lua, since 2026-10-22): tiles found without buildings before
+-- are looked up again, and the heights read from the grid there (the camera's lift, your height) read again at once.
+ns.DataArrived = function()
+	for k, b in pairs(blockIndex) do if not b then blockIndex[k] = nil end end
+	if ns.choice then ns.choice.ok = false end -- new buildings: choose afresh (A1 keeps the choice between frames)
+	ForgetLift()
+	player.hx = nil
+	if player.on then ReadPlayer() end
+end
+ns.DETAIL_RANGE, ns.DETAIL_DIST = DETAIL_RANGE, DETAIL_DIST -- (OnDemand.lua loads buildings a tile beyond these)
 ns.ForgetLift = ForgetLift
 
 -- forward (fx, fy, fz), right (rx, ry, 0), up (ux, uy, uz) and the camera position
@@ -978,31 +1119,51 @@ end
 ns.ScreenToGround = ScreenToGround
 
 -- The ground (or roof) point under a screen position: x, y, height. Walks along the ray in growing
--- steps, then halves the last one; without a hit, the point at the orbit point's height.
-local function ScreenToTerrain(px, py)
-	local cx, cy, cz, dx, dy, dz = ScreenRay(px, py)
-	local len = sqrt(dx * dx + dy * dy + dz * dz)
-	dx, dy, dz = dx / len, dy / len, dz / len
-	local m = cam.map
-	local t0, t = 0, 2
-	while t < 20000 do
-		local x, y, z = cx + dx * t, cy + dy * t, cz + dz * t
-		if z <= GroundHeight(m, x, y) then
-			for _ = 1, 12 do
-				local tm = (t0 + t) / 2
-				local xm, ym = cx + dx * tm, cy + dy * tm
-				if cz + dz * tm <= GroundHeight(m, xm, ym) then t = tm else t0 = tm end
+-- steps, then halves the last one; without a hit, the point at the orbit point's height. Since 2026-10-22 (perf
+-- round A4) a point of the walk more than a yard above its building block's highest vertex and above the grid there
+-- is above the ground there without asking the block's triangles (BlockHeight keeps them for HOLD blocks only, and a
+-- low tilted ray passes over up to 14 blocks): the same answers, fewer blocks decoded again.
+local ScreenToTerrain
+do
+	local function Below(m, x, y, z) -- z <= GroundHeight(m, x, y)
+		if useDetail then
+			local tx, ty = floor(x / TILE), floor(-y / TILE)
+			local tb = TileBlocks(m, tx, ty)
+			if tb then
+				local bx = min(BLOCKS - 1, max(0, floor((x - tx * TILE) / BLOCK)))
+				local by = min(BLOCKS - 1, max(0, floor((-ty * TILE - y) / BLOCK)))
+				local g = tb[by * BLOCKS + bx] and BlockGeo(m, tx, ty, by * BLOCKS + bx)
+				-- (BlockHeight's answer is a mix of three vertices' heights, at most g.hi; else the grid's)
+				if g and z > g.hi + 1 and z > (GridHeight(m, x, y) or 0) then return false end
 			end
-			local x2, y2 = cx + dx * t, cy + dy * t
-			return x2, y2, cz + dz * t
 		end
-		if dz >= 0 and z > 5000 then break end
-		t0 = t
-		t = t + max(2, t * 0.03)
+		return z <= GroundHeight(m, x, y)
 	end
-	local gx, gy = ScreenToGround(px, py)
-	if gx then return gx, gy, cam.th + Lift() end
-	return nil
+	function ScreenToTerrain(px, py)
+		local cx, cy, cz, dx, dy, dz = ScreenRay(px, py)
+		local len = sqrt(dx * dx + dy * dy + dz * dz)
+		dx, dy, dz = dx / len, dy / len, dz / len
+		local m = cam.map
+		local t0, t = 0, 2
+		while t < 20000 do
+			local x, y, z = cx + dx * t, cy + dy * t, cz + dz * t
+			if Below(m, x, y, z) then
+				for _ = 1, 12 do
+					local tm = (t0 + t) / 2
+					local xm, ym = cx + dx * tm, cy + dy * tm
+					if Below(m, xm, ym, cz + dz * tm) then t = tm else t0 = tm end
+				end
+				local x2, y2 = cx + dx * t, cy + dy * t
+				return x2, y2, cz + dz * t
+			end
+			if dz >= 0 and z > 5000 then break end
+			t0 = t
+			t = t + max(2, t * 0.03)
+		end
+		local gx, gy = ScreenToGround(px, py)
+		if gx then return gx, gy, cam.th + Lift() end
+		return nil
+	end
 end
 ns.ScreenToTerrain = ScreenToTerrain
 
@@ -1104,6 +1265,13 @@ end
 local cands = {}  -- cands[i] = { tx, ty, key, d, toTarget, step }
 local blist, bpool = {}, {}  -- blist[i] = { c, bi, d, x0, y1, dc, lv, ... } (the tables live in bpool; blist is the sorted view)
 ns.blockList = blist -- (for the tests: the building blocks in view this frame, e.lv > 0 where drawn raised)
+-- The choice kept between frames (the wrapper after ChooseTiles; since 2026-10-22): ok false makes the next
+-- frame choose afresh, off true chooses every frame (as before); MARGIN: the px round the canvas the choice is
+-- made for (ChooseTiles' and ns.ChooseBlocks' 40); SLACK: the share of the range (at least a quarter tile)
+-- the camera may move before a tile just past the range could count (ChooseTiles looks that far past it);
+-- KEEP: a full choice at least every KEEP frames while the view moves (so a block's level or the controller
+-- waits at most KEEP - 1 frames)
+ns.choice = { ok = false, off = false, frame = -1, n = 0, ng = 0, reused = false, MARGIN = 40, SLACK = 0.05, KEEP = 4, tiles = {}, blockSet = {}, at = -1 }
 
 -- Does a box (x0..x1 east, y0..y1 north, lo..hi up) reach into the view?
 local function BoxInView(x0, x1, y0, y1, lo, hi, F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, halfW, halfH)
@@ -1131,9 +1299,12 @@ local function BoxInView(x0, x1, y0, y1, lo, hi, F, fx, fy, fz, rx, ry, ux, uy, 
 	return inFront and not (left or right or below or above)
 end
 
--- Tiles in view with a level of detail each, within the triangle budget: fills cands, returns how many.
+-- Tiles in view with a level of detail each, within the triangle budget: fills cands, returns how many,
+-- whether a tile just past the range may be in view, how many have their ground drawn (Lod.list) and
+-- whether the level-of-detail controller rested. steps: frames since the last choice (the target is followed
+-- for each; 0 holds the controller).
 -- (The level of detail: Terrain.lua.)
-local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
+local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, steps)
 	local map = cam.map
 	local m = ns.World[map]
 	if not m then return 0 end
@@ -1142,7 +1313,8 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	-- how far to look: the view's footprint, at most a few times the camera distance
 	local range = min(30000, max(1500, cam.dist * 7 + 1200))
 	local tgx, tgy = cx / TILE, -cy / TILE
-	local r = ceil(range / TILE)
+	local slack = max(TILE / 4, range * ns.choice.SLACK) -- (and the tiles just past it: see ring)
+	local r = ceil((range + slack) / TILE)
 	local n = 0
 	local camx, camy, halfDist = cam.x, cam.y, cam.dist * 0.5
 	local dz2 = (cz - cam.th) ^ 2 -- (Lod's distances: the camera's height over the ground it looks at)
@@ -1158,6 +1330,7 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	-- block wholly out of view are not looked at: zoomed out, the tiles in range but out of view (Kalimdor
 	-- from Mount Hyjal at 5,000 yd: about 900 in range, 240 in view) had taken half of a frame's time.
 	local list, ng = Lod.list, 0
+	local ring, reach = false, (range + slack) ^ 2
 	local kw, kh = halfW / F, halfH / F
 	local nw, nh = sqrt(1 + kw * kw), sqrt(1 + kh * kh)
 	local tx0, tx1, ty0, ty1 = max(0, floor(tgx) - r), min(63, floor(tgx) + r), max(0, floor(tgy) - r), min(63, floor(tgy) + r)
@@ -1200,6 +1373,14 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 									c.grid, c.level = not hidden, 10
 									if not hidden then ng = ng + 1; list[ng] = c end
 								end
+							elseif d2 <= reach and not ring then
+								-- just past the range: perhaps in view? (then the choice is not kept between frames: a
+								-- small move of the camera would bring it in)
+								local h = TileHeights(map, tx, ty)
+								px_, py_, pz_ = x0 + TILE / 2 - cx, y0 + TILE / 2 - cy, (h.lo + h.hi) / 2 - cz
+								rad_ = sqrt(TILE * TILE / 2 + (h.hi - h.lo) ^ 2 / 4)
+								pf, pr, pu = px_ * fx + py_ * fy + pz_ * fz, px_ * rx + py_ * ry, px_ * ux + py_ * uy + pz_ * uz
+								ring = not (pf + rad_ <= NEAR or pr - kw * pf > rad_ * nw or -pr - kw * pf > rad_ * nw or pu - kh * pf > rad_ * nh or -pu - kh * pf > rad_ * nh)
 							end
 						end
 					end
@@ -1214,7 +1395,8 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	local fresh = Lod.map ~= map or Lod.kappa <= 0 or abs(cam.x - ox) + abs(cam.y - oy) > cam.dist or cam.dist > 1.5 * od or od > 1.5 * cam.dist
 	-- how many triangles: MORE times what the rule before 2026-10-21 drew on these tiles (cells about
 	-- CELL_PX on screen, coarser until within the budget), within the budget; followed smoothly (FOLLOW
-	-- of the way a frame), as that count jumps whenever one of its tiles changes step
+	-- of the way a frame, for each frame since the last choice), as that count jumps whenever one of its
+	-- tiles changes step
 	local px, target = CELL_PX, 0
 	for _ = 1, 12 do
 		target = 0
@@ -1228,7 +1410,8 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 		px = px * 1.3
 	end
 	target = min(target * Lod.MORE, TRI_BUDGET)
-	if not fresh then target = Lod.target + (target - Lod.target) * Lod.FOLLOW end
+	steps = min(steps or 1, 16)
+	if not fresh then target = Lod.target + (target - Lod.target) * (1 - (1 - Lod.FOLLOW) ^ steps) end
 	Lod.target = target
 	-- zoomed out toward the planet view's hand-over, every tile goes to its coarsest level (W to 0: the
 	-- planet draws tiles by their corners)
@@ -1250,7 +1433,7 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	local kappa, R = Lod.kappa, Lod.RATE
 	if fresh then
 		kappa = Lod.Solve(ng, target) * dd
-	else
+	elseif steps > 0 then
 		local count = Lod.Count(ng, kappa / dd)
 		if count > TRI_BUDGET then
 			kappa = max(kappa * (1 + R), Lod.Solve(ng, TRI_BUDGET) * dd)
@@ -1260,6 +1443,7 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 			kappa = kappa / (1 + R)
 		end
 	end
+	local settled = kappa == Lod.kappa -- (the choice is kept between frames only while the controller rests)
 	kappa = max(kappa, Lod.TAU_MIN * dd)
 	local tau = kappa / dd
 	Lod.kappa = kappa
@@ -1271,7 +1455,7 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 		local c = list[i]
 		c.level = Lod.Level(c.rec, c.ld, frameNo)
 	end
-	return n
+	return n, ring, ng, settled
 end
 
 -- Building blocks in view and the level each is drawn at (ns.ChooseBlocks; since 2026-10-21). Every block
@@ -1289,6 +1473,14 @@ end
 do
 	local LEVEL_HYST = 1.25
 	local lvPrev, lvNow, lvFrame = {}, {}, -1 -- block key -> level chosen last frame / this frame
+	-- (for /gps3d probe, Probe.lua: the levels chosen last, copied out, and put back as last frame's, so the
+	-- view the probe leaves is the one it found, not one the hysteresis reached by another way)
+	function ns.BlockLevels(put)
+		if put then wipe(lvNow); for k, v in pairs(put) do lvNow[k] = v end; lvFrame = frameNo; ns.choice.ok = false; return end
+		local copy = {}
+		for k, v in pairs(lvNow) do copy[k] = v end
+		return copy
+	end
 	local function ByCamera(p, q) return p.dc < q.dc end
 	-- lowest and highest vertex of every block of a tile, read once from the fine level's string
 	local function Ranges(tb)
@@ -1428,6 +1620,241 @@ do
 		for i = 1, n do local e = blist[i]; if e.lv > 0 then lvNow[e.bk] = e.lv end end
 		stats.detailPx = T
 		return n, used
+	end
+	ns.BlockRanges = Ranges -- (the kept choice's bound, below)
+	-- kept between frames with the tiles (ns.choice, below): blist and the levels as the last full choice left
+	-- them, and that choice's levels still count as last frame's for the next one
+	local Choose = ns.ChooseBlocks
+	function ns.ChooseBlocks(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, nCands)
+		local k = ns.choice
+		if k.reused and k.blocks == k.frame then lvFrame = frameNo; return k.nb, k.used end
+		local n, used = Choose(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, nCands)
+		k.blocks, k.nb, k.used = k.frame, n, used
+		local bset = k.blockSet -- (the blocks chosen, by the choice's frame number)
+		for i = 1, n do bset[blist[i].bk] = k.frame end
+		return n, used
+	end
+end
+
+-- The tile and block choice kept between frames (since 2026-10-22, perf round step A1). ChooseTiles and
+-- ns.ChooseBlocks test every tile and block against the view grown by 40 px all round (MARGIN), so what they
+-- choose can only change where something crosses that edge. A frame keeps the last full choice while every
+-- point that can show on the canvas now (2 px round it, where triangles are cut) lay inside the grown view
+-- that choice was made for, so its tile and block were chosen then (Inside). The view now is a pyramid from
+-- the camera: to depth dn everything in it is known to be in the kept choice (Near: nothing drawn is that
+-- near, or every tile and block reaching in there was chosen), nothing is farther than the range allows
+-- (Dmax), and the pyramid between the two depths is convex, so it lies inside the grown view if its 8
+-- corners do: one bound for moving, turning, tilting and zooming together (in the sandbox's 900 x 650 window
+-- over Stormwind at 330 yd: 18 yd of movement, a turn of 4.75 degrees straight down or 2.25 tilted, or 8 % of
+-- zooming out; zooming in brings nothing new into view). On a kept frame each kept tile's level and
+-- image (minimap or overview) are still worked out for the camera as it is (Refresh: the same as a full
+-- choice with the same tolerance); which tiles and blocks are candidates and the blocks' levels wait for the
+-- next full choice, at most KEEP - 1 frames. The level-of-detail controller (Lod.kappa) steps only in a full
+-- choice, so a frame is kept only while it rests (its last step changed nothing) and the kept levels stay
+-- within its target and the budget: zooming, when it works every frame, the ground moves exactly as before
+-- (tools/sandbox/test_terrain.py). A resize, another map, a budget, buildings switched on or off, the field
+-- of view, the game's buildings standing in for blocks (ns.coverStamp, Models.lua) and the probe putting
+-- levels back (ns.BlockLevels) choose afresh at once; so does a frame with a tile just past the range perhaps
+-- in view. Checked against a full choice every frame and measured: tools/sandbox/test_choice.py, PERFORMANCE.md.
+do
+	local Choose = ChooseTiles
+	local keep = ns.choice
+	local cv = {} -- the four corner rays of the view now, per unit of depth (x, y, z of each)
+	local reach = DETAIL_RANGE + TILE / 4
+	-- the highest point drawn on a tile: its ground's highest height (drawn levels and morphing stay within
+	-- the heights), with its buildings (TileTop) where blocks can be drawn (within DETAIL_RANGE of the view's
+	-- centre, a quarter tile spare); and its blocks if so (TileBlocks)
+	local function TopOf(map, tx, ty, h, detail)
+		local ax, ay = tx * TILE, -ty * TILE
+		local nx, ny = min(ax + TILE, max(ax, cam.x)) - cam.x, min(ay, max(ay - TILE, cam.y)) - cam.y
+		local tb = detail and nx * nx + ny * ny < reach * reach and TileBlocks(map, tx, ty)
+		if tb then return TileTop(map, tx, ty), tb end
+		return h.hi, nil
+	end
+	-- does a box reach into the view now nearer than depth D? (its corners against the view's sides, 2 px
+	-- round the canvas: kw, kh over F; wholly behind the camera or wholly past D: no)
+	local function Reaches(x0, x1, y0, y1, lo, hi, D, kw, kh, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
+		local behind, past, left, right, below, above = true, true, true, true, true, true
+		for c = 0, 7 do
+			local dx = ((c % 2 == 0) and x0 or x1) - cx
+			local dy = ((c % 4 < 2) and y0 or y1) - cy
+			local dz = ((c < 4) and lo or hi) - cz
+			local d = dx * fx + dy * fy + dz * fz
+			local sx, sy = dx * rx + dy * ry, dx * ux + dy * uy + dz * uz
+			if d > NEAR then behind = false end
+			if d < D then past = false end
+			if sx > -kw * d then left = false end
+			if sx < kw * d then right = false end
+			if sy > -kh * d then below = false end
+			if sy < kh * d then above = false end
+		end
+		return not (behind or past or left or right or below or above)
+	end
+	-- dn: a depth to which everything the view now holds is in the kept choice. Quick: the view's near part
+	-- holds nothing at all, its lowest point being above the highest point of the tiles under it (10 yd
+	-- spare: a coarse building level may top the fine one). Where that leaves little (something tall near
+	-- the camera: Orgrimmar's cliffs and towers), D itself when every tile whose column (its square from its
+	-- lowest to its highest point) reaches into the view nearer than D is kept with its ground drawn, and
+	-- so is every block of it whose column (to its highest vertex, ns.BlockRanges) does.
+	local mapTop = {} -- (each map's highest ground height)
+	local function Near(map, D, x0, x1, y0, y1, zmin, kw, kh, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, detail)
+		local top = mapTop[map]
+		if not top then
+			top = -HUGE
+			for key in pairs(ns.World[map] or {}) do
+				local h = TileHeights(map, key % 64, floor(key / 64))
+				if h and h.hi > top then top = h.hi end
+			end
+			mapTop[map] = top
+		end
+		if not detail then -- (far out: the camera high over all of the map)
+			local quick = min(D, (cz - top - 10) / -zmin)
+			if quick >= 0.5 * D then return quick end
+		end
+		top = -HUGE
+		for ty = max(0, floor(-(cy + D * y1) / TILE)), min(63, floor(-(cy + D * y0) / TILE)) do
+			for tx = max(0, floor((cx + D * x0) / TILE)), min(63, floor((cx + D * x1) / TILE)) do
+				local h = TileHeights(map, tx, ty)
+				if h then local v = TopOf(map, tx, ty, h, detail); if v > top then top = v end end
+			end
+		end
+		local quick = min(D, (cz - top - 10) / -zmin)
+		if quick >= 0.5 * D then return quick end
+		D = min(D, 1500)
+		local tiles, blocks, frame = keep.tiles, keep.blockSet, keep.frame
+		for ty = max(0, floor(-(cy + D * y1) / TILE)), min(63, floor(-(cy + D * y0) / TILE)) do
+			for tx = max(0, floor((cx + D * x0) / TILE)), min(63, floor((cx + D * x1) / TILE)) do
+				local h = TileHeights(map, tx, ty)
+				if h then
+					local v, tb = TopOf(map, tx, ty, h, detail)
+					local ax, ay = tx * TILE, -ty * TILE
+					if Reaches(ax, ax + TILE, ay - TILE, ay, h.lo, v + 10, D, kw, kh, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz) then
+						local key = ty * 64 + tx
+						if tiles[key] ~= frame then return quick end
+						if tb then
+							if not tb.top then ns.BlockRanges(tb) end
+							local bk0 = (map * 4096 + key) * 64
+							for by = max(0, floor((ay - (cy + D * y1)) / BLOCK)), min(BLOCKS - 1, floor((ay - (cy + D * y0)) / BLOCK)) do
+								for bx = max(0, floor((cx + D * x0 - ax) / BLOCK)), min(BLOCKS - 1, floor((cx + D * x1 - ax) / BLOCK)) do
+									local bi = by * BLOCKS + bx
+									local bx0, by1 = ax + bx * BLOCK, ay - by * BLOCK
+									if tb[bi] and blocks[bk0 + bi] ~= frame and Reaches(bx0, bx0 + BLOCK, by1 - BLOCK, by1, tb.lo[bi], tb.top[bi] + 10, D, kw, kh, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz) then return quick end
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+		return D
+	end
+	local function Inside(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, w, hgt, range, detail)
+		local kw, kh = (w / 2 + 2) / F, (hgt / 2 + 2) / F
+		local zmin, x0, x1, y0, y1 = 0, 0, 0, 0, 0
+		for c = 0, 3 do
+			local sw, sh = (c % 2 == 0) and kw or -kw, (c < 2) and kh or -kh
+			local vx, vy, vz = fx + sw * rx + sh * ux, fy + sw * ry + sh * uy, fz + sh * uz
+			cv[c * 3 + 1], cv[c * 3 + 2], cv[c * 3 + 3] = vx, vy, vz
+			if vz < zmin then zmin = vz end
+			if vx < x0 then x0 = vx end
+			if vx > x1 then x1 = vx end
+			if vy < y0 then y0 = vy end
+			if vy > y1 then y1 = vy end
+		end
+		if zmin >= 0 then return false end
+		-- (Dmax: past the range and the slack, a tile's far corner and any height)
+		local Dmax = range + max(TILE / 4, range * keep.SLACK) + 2 * TILE + abs(cz) + 4000
+		local dn = Near(cam.map, min(Dmax, cam.dist), x0, x1, y0, y1, zmin, kw, kh, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, detail)
+		if dn <= NEAR then return false end
+		-- the view between dn and Dmax inside the kept one grown by MARGIN
+		local ox, oy, oz, gx, gy, gz, qx, qy, ex, ey, ez = keep.cx, keep.cy, keep.cz, keep.fx, keep.fy, keep.fz, keep.rx, keep.ry, keep.ux, keep.uy, keep.uz
+		local kw0, kh0 = (keep.w / 2 + keep.MARGIN) / keep.F, (keep.h / 2 + keep.MARGIN) / keep.F
+		for c = 0, 7 do
+			local t = c < 4 and dn or Dmax
+			local k = (c % 4) * 3
+			local dx, dy, dz = cx + t * cv[k + 1] - ox, cy + t * cv[k + 2] - oy, cz + t * cv[k + 3] - oz
+			local d = dx * gx + dy * gy + dz * gz
+			if d <= NEAR then return false end
+			local sx, sy = dx * qx + dy * qy, dx * ex + dy * ey + dz * ez
+			if sx > kw0 * d or -sx > kw0 * d or sy > kh0 * d or -sy > kh0 * d then return false end
+		end
+		return true
+	end
+	-- a kept frame: the tolerance and each kept tile's level for the camera as it is (as ChooseTiles with
+	-- the controller held); false when they would go over the budget or the controller's target
+	local function Refresh(F, cx, cy, cz, still)
+		keep.at = frameNo
+		if still then return true end -- (redrawn as it was: the levels and tolerance are last frame's)
+		local dz2 = (cz - cam.th) ^ 2
+		local W, GL = 1, ns.GLOBE -- (the planet's hand-over, as ChooseTiles)
+		if GL and cam.dist > GL.FLAT_MAX then
+			local s = min(1, (cam.dist - GL.FLAT_MAX) / (GL.HANDOVER - GL.FLAT_MAX))
+			W = 1 - s * s * (3 - 2 * s)
+		end
+		local dd = cam.dist * cam.dist
+		local tau = max(Lod.kappa, Lod.TAU_MIN * dd) / dd
+		Lod.cx, Lod.cy, Lod.dz2, Lod.F, Lod.frame = cx, cy, dz2, F, frameNo
+		Lod.SetTau(tau, W)
+		stats.tau = tau
+		local list, sum, map = Lod.list, 0, cam.map
+		-- (a tile's image: the minimap while its nearest point, c.d, is nearer than L; bounded by the tile's
+		-- height range, the ground's height there looked up only when the bounds straddle L)
+		local L, half = TILE * F / MINIMAP_PX, cam.dist * 0.5
+		local far = mapTop[map] and max(cz - mapTop[map], half) >= L -- (every tile's nearest point past L)
+		for i = 1, keep.ng do
+			local c = list[i]
+			local x0, y1 = c.tx * TILE, -c.ty * TILE
+			local nx, ny = min(x0 + TILE, max(x0, cx)) - cx, min(y1, max(y1 - TILE, cy)) - cy
+			local a2 = nx * nx + ny * ny
+			c.ld = sqrt(a2 + dz2)
+			local level = Lod.Level(c.rec, c.ld, frameNo)
+			c.level = level
+			sum = sum + c.rec.T[level]
+			local exact = far and max(c.d, 1) < L
+			if not far then
+				local h = TileHeights(map, c.tx, c.ty)
+				local z1, z2 = cz - h.hi, cz - h.lo
+				local lo2 = (z1 <= 0 and z2 >= 0) and 0 or min(z1 * z1, z2 * z2)
+				local dlo, dhi = max(sqrt(a2 + lo2), half, 1), max(sqrt(a2 + max(z1 * z1, z2 * z2)), half, 1)
+				exact = not (dhi < L or dlo >= L) or (max(c.d, 1) < L) ~= (dhi < L)
+			end
+			if exact then
+				local dz = cz - (GridHeight(map, nx + cx, ny + cy) or TileHeights(map, c.tx, c.ty).lo)
+				c.d = max(sqrt(a2 + dz * dz), half)
+			end
+		end
+		-- (over the target the controller would take a step: the full choice follows; its thresholds are this
+		-- frame's with the controller's new tolerance, not these, which Lod.Thresholds keeps for the frame)
+		if sum <= TRI_BUDGET and sum <= Lod.target then return true end
+		for i = 1, keep.ng do list[i].rec.f = -1 end
+		return false
+	end
+	ChooseTiles = function(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
+		local w, hgt = canvas:GetSize()
+		local range = min(30000, max(1500, cam.dist * 7 + 1200)) -- (as ChooseTiles)
+		local detail = useDetail and cam.dist < DETAIL_DIST
+		-- (the view exactly as last frame drew it: a redraw)
+		local still = keep.at == frameNo - 1 and cx == keep.lx and cy == keep.ly and cz == keep.lz and fx == keep.lfx and fy == keep.lfy and fz == keep.lfz
+			and rx == keep.lrx and cam.dist == keep.ldist and cam.th == keep.lth and F == keep.lF
+		keep.lx, keep.ly, keep.lz, keep.lfx, keep.lfy, keep.lfz, keep.lrx, keep.ldist, keep.lth, keep.lF = cx, cy, cz, fx, fy, fz, rx, cam.dist, cam.th, F
+		if keep.ok and not keep.off and not keep.ring and keep.settled and (still or frameNo - keep.frame < keep.KEEP) and keep.map == cam.map and keep.w == w and keep.h == hgt
+			and keep.F == F and keep.grid == TRI_BUDGET and keep.bud == DETAIL_BUDGET and keep.detail == detail and keep.cover == ns.coverStamp
+			and abs(cx - keep.cx) + abs(cy - keep.cy) + abs(range - keep.range) <= max(TILE / 4, keep.range * keep.SLACK)
+			and Inside(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, w, hgt, range, detail) and Refresh(F, cx, cy, cz, still) then
+			keep.reused = true
+			local p = ns.perf -- (the debug log's PERF line: frames that kept the choice)
+			if p then p.kept = (p.kept or 0) + 1 end
+			return keep.n
+		end
+		local n, ring, ng, settled = Choose(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, frameNo - keep.frame)
+		keep.ok, keep.reused, keep.frame, keep.n, keep.ng, keep.ring, keep.settled = true, false, frameNo, n, ng or 0, ring, settled
+		keep.at = frameNo
+		local tiles = keep.tiles -- (the tiles chosen with their ground drawn, by this frame's number: Near)
+		for i = 1, n do local c = cands[i]; if c.grid then tiles[c.key] = frameNo end end
+		keep.map, keep.w, keep.h, keep.F, keep.range = cam.map, w, hgt, F, range
+		keep.grid, keep.bud, keep.detail, keep.cover = TRI_BUDGET, DETAIL_BUDGET, detail, ns.coverStamp
+		keep.cx, keep.cy, keep.cz, keep.fx, keep.fy, keep.fz, keep.rx, keep.ry, keep.ux, keep.uy, keep.uz = cx, cy, cz, fx, fy, fz, rx, ry, ux, uy, uz
+		return n
 	end
 end
 
@@ -1837,6 +2264,7 @@ local function Render()
 		if p then p.n, p.sum = p.n + 1, p.sum + stats.ms; if stats.ms > p.max then p.max = stats.ms end end
 		return
 	end
+	if ns.WantData then ns.WantData() end -- buildings and models near the view, loaded on demand (OnDemand.lua)
 	local F = Focal()
 	local fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz = CameraBasis()
 	RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
@@ -2326,6 +2754,7 @@ local function SelfTest()
 	end
 	Report("world data: %d maps, %d tiles; buildings: %d maps, %d tiles, %d blocks (indexed in %.0f ms), %s",
 		nMaps, nTiles, bMaps, bTiles, bBlocks, debugprofilestop() - t0, useDetail and "on" or "off")
+	if ns.DataSelfTest then ns.DataSelfTest(Report) end -- the data addons: loaded, not needed yet, waiting, missing
 	ReadPlayer()
 	if player.on then
 		Report("you: map %d (%s) at %.1f, %.1f (height %.1f), facing %.2f", player.map, MapName(player.map), player.x, player.y, player.h, player.facing)
@@ -2475,7 +2904,7 @@ GPS3D_API.TakePerf = function()
 	ns.perf = { n = 0, sum = 0, max = 0, tris = 0 }
 	local models = ns.TakeModelsPerf and ns.TakeModelsPerf() -- Models.lua: models shown, loading, picking times
 	if not (p and p.n > 0) then return models end
-	return ("3D: %d frames drawn, %.2f ms average, %.2f ms worst, %.0f triangles average"):format(p.n, p.sum / p.n, p.max, p.tris / p.n) .. (models and ("; " .. models) or "")
+	return ("3D: %d frames drawn (%d kept the tile choice), %.2f ms average, %.2f ms worst, %.0f triangles average"):format(p.n, p.kept or 0, p.sum / p.n, p.max, p.tris / p.n) .. (models and ("; " .. models) or "")
 end
 
 ------------------------------------------------------------------------------------------------
@@ -2496,6 +2925,10 @@ end
 ns.SetBuildingBudget = function(n) DETAIL_BUDGET = n; ns.DB().buildings = n; ns.Redraw() end
 ns.SetGridBudget = function(n) TRI_BUDGET = n; ns.DB().grid = n; ns.Redraw() end
 ns.SetModelYaw = function(degrees) ns.DB().modelYaw = rad(degrees); ns.Redraw() end
+-- for /gps3d probe (Probe.lua): the live budgets and buildings switch (to put them back after), and the
+-- marker-only redraw
+ns.Budgets = function() return TRI_BUDGET, DETAIL_BUDGET, useDetail end
+ns.RenderMarker = RenderMarker
 
 GPS3D_API.settings = {
 	{ kind = "header", name = "3D view" },
@@ -2576,6 +3009,8 @@ GPS3D_API.settings = {
 -- /gps3d clear            remove the extra models
 -- /gps3d fov [rad]        override the models' field of view (no value: automatic)
 -- /gps3d cam              print the scene camera's vectors
+-- /gps3d probe [stop]     in-game measurements and test pictures for the performance work (Probe.lua,
+--                         TESTING.md section 15): about a minute, not in combat
 SLASH_GPS3D1 = "/gps3d"
 SlashCmdList.GPS3D = function(msg)
 	GPS.Log("SLASH", "/gps3d %s", msg or "")
@@ -2630,6 +3065,8 @@ SlashCmdList.GPS3D = function(msg)
 		cam.fov = tonumber(arg)
 		print(("|cff55ff55GPS3D|r fov %s (scene default was %s)"):format(tostring(cam.fov or "auto"), tostring(defaultFov)))
 		Render()
+	elseif cmd == "probe" then
+		ns.Probe(arg)
 	elseif cmd == "cam" then
 		print("|cff55ff55GPS3D|r forward", scene:GetCameraForward())
 		print("|cff55ff55GPS3D|r right", scene:GetCameraRight())

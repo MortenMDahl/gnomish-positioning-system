@@ -1,0 +1,22 @@
+## Interface: 16001
+## Title: GPS 3D data: dungeons, raids, battlegrounds
+## Notes: Buildings of the dungeons, raids and battlegrounds (maps 30, 33, 36, 47, 209, 289, 309, 329, 469, 489, 509, 529, 531). Loaded by GPS 3D when its 3D view first needs it (load on demand).
+## Version: 0.5.0
+## X-License: MIT
+## LoadOnDemand: 1
+## Dependencies: GPS3D
+
+Link.lua
+Detail_30.lua
+Detail_33.lua
+Detail_36.lua
+Detail_47.lua
+Detail_209.lua
+Detail_289.lua
+Detail_309.lua
+Detail_329.lua
+Detail_469.lua
+Detail_489.lua
+Detail_509.lua
+Detail_529.lua
+Detail_531.lua

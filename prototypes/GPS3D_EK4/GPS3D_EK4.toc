@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: GPS 3D data: Eastern Kingdoms, buildings 4 of 4
+## Notes: Buildings of the Eastern Kingdoms, tile rows 53 to 60 (part 4 of 4). Loaded by GPS 3D when its 3D view first needs it (load on demand).
+## Version: 0.5.0
+## X-License: MIT
+## LoadOnDemand: 1
+## Dependencies: GPS3D
+
+Link.lua
+Detail_0_4.lua

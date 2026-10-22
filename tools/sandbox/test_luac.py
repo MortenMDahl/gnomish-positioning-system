@@ -73,7 +73,8 @@ if not LUAC:
     sys.exit(1)
 
 code = sorted(glob.glob(os.path.join(ROOT, 'Interface/AddOns/GnomishPositioningSystem/*.lua')) + glob.glob(os.path.join(ROOT, 'prototypes/GPS3D/*.lua')))
-data = sorted(glob.glob(os.path.join(ROOT, 'Interface/AddOns/GnomishPositioningSystem/Data/*.lua')) + glob.glob(os.path.join(ROOT, 'prototypes/GPS3D/Data/*.lua')))
+data = sorted(glob.glob(os.path.join(ROOT, 'Interface/AddOns/GnomishPositioningSystem/Data/*.lua')) + glob.glob(os.path.join(ROOT, 'prototypes/GPS3D/Data/*.lua'))
+              + glob.glob(os.path.join(ROOT, 'prototypes/GPS3D_*/*.lua')))  # (the load-on-demand data addons, since 2026-10-22)
 bad = [(os.path.relpath(p, ROOT), msg) for p in code + data for ok, msg in [compile_ok(p)] if not ok]
 check(f'every shipped file compiles with Lua 5.1 ({len(code)} code files, {len(data)} data files)', not bad and len(code) >= 8, str(bad[:3]))
 

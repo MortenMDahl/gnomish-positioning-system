@@ -6,7 +6,7 @@
 # performance lines and the self-test. Ends with mutations: each breaks one rule in Models.lua and
 # must make its check fail.
 # Usage: python test_models.py   (fill site/addons first, as for test_world.py)
-import lupa.lua54 as lupa54, os, json, math, random, re, sys
+import lupa.lua54 as lupa54, os, json, math, random, re, sys, glob
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITE = os.path.join(HERE, 'site')
 ROOT = os.path.join(HERE, '..', '..')
@@ -48,14 +48,22 @@ class Game:
         self.L.execute(open(f'{SITE}/engine.lua').read())
         self.L.execute(open(f'{SITE}/zones.lua').read())
         G.SANDBOX_WMO = wmo
+        G.SANDBOX_SITE = SITE
+        # (since 2026-10-22 the model data is the load-on-demand addon GPS3D_Models, which OnDemand.lua loads when
+        # models are first wanted; without it: the game answers that the addon is missing)
+        if not with_models: G.SANDBOX.lodRefuse['GPS3D_Models'] = 'MISSING'
         files3d = toc_files(os.path.join(OLD, 'GPS3D.toc')) if before else GPS3D_FILES
         for addon, files in [('GnomishPositioningSystem', GPS_FILES), ('GPS3D', files3d)]:
             for f in files:
                 if not with_models and f.startswith('Data/Models_'): continue
                 if not models_file and (f == 'Models.lua' or f.startswith('Data/Models_')): continue
-                # (the saved TOC lists Detail_1_4.lua, which the build no longer makes since caves are left out)
-                if before and f.startswith('Data/Detail_') and not os.path.exists(f'{SITE}/addons/{addon}/{f}'): continue
-                src = open(os.path.join(OLD, 'GPS3D.lua') if before and f == 'GPS3D.lua' else f'{SITE}/addons/{addon}/{f}').read()
+                path = f'{SITE}/addons/{addon}/{f}'
+                if before and f.startswith('Data/Detail_'):  # (the saved TOC lists the buildings: now in the data addons)
+                    found = glob.glob(f'{SITE}/addons/GPS3D_*/' + os.path.basename(f))
+                    # (and Detail_1_4.lua, which the build no longer makes since caves are left out)
+                    if not found: continue
+                    path = found[0]
+                src = open(os.path.join(OLD, 'GPS3D.lua') if before and f == 'GPS3D.lua' else path).read()
                 if patch and f == 'Models.lua':
                     old, new = patch
                     assert src.count(old) == 1, ('patch target', old)
@@ -160,6 +168,9 @@ g = Game(buildings=None)
 G, ns = g.G, g.ns
 st = ns.modelState
 g.open3d()
+# (the model data is loaded when models are first wanted, OnDemand.lua, checked by test_ondemand.py; with the
+# defaults they are not, so for the data checks it is loaded here as OnDemand.lua would)
+G.C_AddOns.LoadAddOn('GPS3D_Models'); ns.ModelDataArrived()
 
 # ---- M1: the data as the addon reads it ----
 nmaps = sum(1 for _ in ns.Models.keys())

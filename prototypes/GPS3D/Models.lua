@@ -172,6 +172,13 @@ end
 local function PropsWanted()
 	return Get("props") and Get("modelCount") > 0
 end
+-- The data (GPS3D_Models, a load-on-demand addon since 2026-10-22) is loaded by OnDemand.lua the first time the
+-- view wants models; then what was read before it came (maps and tiles found empty) is read again.
+ns.ModelsWanted = function() return BuildingsWanted() or PropsWanted() end
+ns.ModelDataArrived = function()
+	wipe(palettes); wipe(tiles); nTiles = 0; wipe(wmoLists)
+	M.version, M.dirty = M.version + 1, true
+end
 
 local function Release(e)
 	if e.id then M.byId[e.id] = nil; e.id = nil end
@@ -180,12 +187,16 @@ end
 local function ReleaseAll()
 	for _, e in ipairs(M.pool) do Release(e) end
 	M.shown, M.shownWmo, M.loading = 0, 0, 0
+	if M.coverOn then CoverChanged() end
 	M.coverOn = false
 end
 
 -- Settings changed: choose again
 ns.ModelsChanged = function()
 	M.version, M.dirty = M.version + 1, true
+	-- the model data is a load-on-demand addon (OnDemand.lua): switched on with the camera still, nothing would
+	-- ask for it until the view moved, so ask now
+	if ns.frame:IsShown() and ns.WantData then ns.WantData() end
 	if ns.frame:IsShown() and ns.SelectModels then ns.SelectModels() end -- at once (what /gps3d models prints is then current)
 end
 
@@ -276,6 +287,17 @@ local function Place(e, t, i, pal, now)
 end
 
 local Holes -- (below)
+-- GPS3D.lua keeps its choice of building blocks between frames (ns.choice): a change of where the game's
+-- buildings stand in for the blocks (ns.ModelsCover) makes it choose again (ns.coverStamp)
+local function SameSpots(a, b)
+	if not a or not b or #a ~= #b then return a == b end
+	for i = 1, #a do
+		local p, q = a[i], b[i]
+		if p[1] ~= q[1] or p[2] ~= q[2] or p[3] ~= q[3] then return false end
+	end
+	return true
+end
+local function CoverChanged() ns.coverStamp = (ns.coverStamp or 0) + 1 end
 
 local function NewEntry()
 	if #M.pool >= POOL_LIMIT then return nil end
@@ -445,6 +467,7 @@ local function Select()
 	Holes()
 	M.inRange, M.shownWmo, M.shown = n, wmos, wmos + props - later
 	-- the simplified blocks give way inside Model distance once the game's buildings are known to load
+	local wasOn, oldMap, oldX, oldY, oldR, oldUndrawn = M.coverOn, M.coverMap, M.coverX, M.coverY, M.coverR, M.undrawn
 	M.coverOn = showB and M.wmo == "yes"
 	M.coverMap, M.coverX, M.coverY, M.coverR = map, cam.x, cam.y, R
 	-- the buildings around the view the game is not drawing (further off than Model distance plus their
@@ -471,6 +494,7 @@ local function Select()
 		end
 	end
 	M.undrawn = undrawn
+	if wasOn ~= M.coverOn or M.coverOn and (oldMap ~= map or oldX ~= cam.x or oldY ~= cam.y or oldR ~= R or not SameSpots(oldUndrawn, undrawn)) then CoverChanged() end
 	local ms = debugprofilestop() - t0
 	local p = M.perf
 	p.picks, p.ms, p.cands = p.picks + 1, p.ms + ms, p.cands + n
@@ -490,6 +514,7 @@ Holes = function()
 		end
 	end
 	for _, h in ipairs(M.badWmo or {}) do holes[#holes + 1] = h end
+	if M.coverOn and not (SameSpots(holes, M.holes) and SameSpots(drawn, M.drawn)) then CoverChanged() end
 	M.holes, M.drawn = holes, drawn
 end
 

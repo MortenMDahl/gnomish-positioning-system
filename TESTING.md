@@ -12,13 +12,14 @@ What this test decides (send these even if everything else works):
 - **Other addons' markers**: section 11 step 1's `/gps test` lines say which addons' map layers work in GPS's traditional map.
 - **How many of the game's models the 3D view can afford**: the `PERF` lines of section 10 step 4.
 - **Minimap images by file ID, JPEG overviews, model field of view and yaw, taint from Blizzard's map code**: sections 2, 6 and 7.
+- **What the 3D view's frame time is made of, and three of the client's drawing rules** (since 2026-10-22): `/gps3d probe`, section 15. It decides the order of the performance work.
 
 Before the game, the GPS Sandbox page (`tools/sandbox`) runs the same files in a browser with a simulated player: good for trying the controls and the look, not for the game-only questions (image loading by file ID, the real character model, real frame times).
 
 ## 0. Before you start
 
-1. Close the game. Copy `Interface/AddOns/GnomishPositioningSystem` and `prototypes/GPS3D` into `C:\Program Files (x86)\World of Warcraft\_classic_beta_\Interface\AddOns\`. You should end up with `...\AddOns\GnomishPositioningSystem\Core.lua` and `...\AddOns\GPS3D\GPS3D.lua`.
-2. Start the game. On the character screen, open **AddOns** and check both are listed and ticked. If they show as out of date, tick **Load out of date AddOns** and note the interface number the client wants (the self-test also prints it).
+1. Close the game. Copy `Interface/AddOns/GnomishPositioningSystem` and every `prototypes/GPS3D*` folder (`GPS3D` and, since 2026-10-22, its nine data folders `GPS3D_EK1` to `GPS3D_EK4`, `GPS3D_Kalimdor1` to `GPS3D_Kalimdor3`, `GPS3D_Instances` and `GPS3D_Models`) into `C:\Program Files (x86)\World of Warcraft\_classic_beta_\Interface\AddOns\`. You should end up with `...\AddOns\GnomishPositioningSystem\Core.lua`, `...\AddOns\GPS3D\GPS3D.lua` and `...\AddOns\GPS3D_EK1\GPS3D_EK1.toc` (and the other eight next to it). An older copy's `GPS3D\Data\Detail_*.lua` and `Models_*.lua` can be deleted: nothing loads them any more.
+2. Start the game. On the character screen, open **AddOns** and check both are listed and ticked, and the nine "GPS 3D data: ..." entries too (they load only when the 3D view needs them, so the list may call them "load on demand"; leave them ticked). If they show as out of date, tick **Load out of date AddOns** and note the interface number the client wants (the self-test also prints it).
 3. Log in and turn on Lua error messages: `/console scriptErrors 1`.
 4. Turn on chat logging so the reports are saved to a file: `/chatlog`. The game writes to `_classic_beta_\Logs\WoWChatLog.txt` (the file fills in when you log out or `/reload`).
 5. Open MapExplorer in a browser (https://coldensjo.github.io/ClassicWowMapExplorer/, game version Forever). Its top-right corner shows the zone and **tile x_y** under the camera, which is the reference for the alignment checks.
@@ -89,7 +90,8 @@ The 3D window needs GPS (it uses GPS's look and switches with it). Stand anywher
 
 | Line | Expected | If not |
 |---|---|---|
-| `world data:` | 16 maps, 2277 tiles; buildings: 15 maps, 859 tiles, 9645 blocks, on | Fewer: some `Data\World_*.lua` or `Data\Detail_*.lua` files were not copied or are missing from `GPS3D.toc`. |
+| `world data:` | 16 maps, 2277 tiles; buildings: only the bands loaded so far (since 2026-10-22 the buildings load when the view first comes near them: in Elwynn Forest 1 map, about 100 tiles), on | Fewer world tiles: some `Data\World_*.lua` files were not copied or are missing from `GPS3D.toc`. |
+| `data on demand (...)` | each data folder: `loaded (N ms)` for the ones near where you looked, `not needed yet` for the rest, `Models not needed` with props off and simplified buildings | `NOT LOADED (MISSING)`: that `GPS3D_*` folder was not copied; `(DISABLED)`: tick it in the AddOns list; `(INTERFACE_VERSION)`: out of date, tick **Load out of date AddOns**. A `data missing:` line follows naming them. `waits for combat to end`: you were in combat, which is expected (nothing loads in a fight). |
 | `you:` | your map and position, height, facing | `no 3D terrain for ...` on a continent: send the line (map ID mismatch). `position not available` outdoors: send the line. |
 | `height:` | `game Z` is a number close to `map surface` | `game Z nil`: the game gives no height, the arrow uses the map surface. A Z far from the surface: send the line. |
 | `render:` | average and worst ms over 36 camera steps, tiles by cell size; buildings: blocks (fine, coarse, far), how far out, triangles; triangles shown | The main number. Under 16 ms is smooth; 16 to 40 ms is usable; above that, lower `/gps3d buildings 2000` (building triangles) or `/gps3d budget 2000` (ground) and send the lines. Buildings cost 2.5 to 4 times the ground alone in cities: run `/gps3d test` in Stormwind or Orgrimmar with buildings on, then `/gps3d detail off` and `/gps3d test` again, and send both render lines. |
@@ -99,7 +101,7 @@ The 3D window needs GPS (it uses GPS's look and switches with it). Stand anywher
 | `images:` | `N of N different terrain images in view report loaded` | `0 of N`: minimap or overview images do not load here. |
 | `icons:` | `3 of 3` | Fewer: the addon's own TGA icons in `GnomishPositioningSystem\Media\` did not load (check the folder was copied); send the line. |
 | `marker (both):` | `arrow shown, character model loaded=true; camera follow` | `arrow hidden` while you are outdoors, or `loaded=false` / `not created`: send the line and a screenshot. |
-| `models data:` | 16 maps, 1132 tiles, 415011 placements of 9441 models (196 of them caves and mines) | Fewer: some `Data\Models_*.lua` files were not copied or are missing from `GPS3D.toc`. |
+| `models data:` | with props or the game's buildings on: 16 maps, 1132 tiles, 415011 placements of 9441 models (196 of them caves and mines); with the defaults 0 maps (the models' data loads only when they are switched on) | Fewer with models on: the `GPS3D_Models` folder was not copied or is incomplete. |
 | `models: buildings ...; props and trees on ...; N shown (B buildings), L loading, F failed, A actors` | N above 0 outdoors; F 0 | F above 0: some of the game's models do not load in an addon's view; send the line. |
 | `models: building (WMO) probe fileID ...: set=... loaded=... box ...` | **The answer to whether real buildings are possible.** `set=true loaded=true box` with three sizes in yards: the game draws its buildings for addons | `loaded=false` or `box none`: the game does not; buildings stay as GPS's simplified shapes (section 10). Send the line either way. |
 | `models: prop (M2) probe fileID ...: set=true loaded=true box ...` | loaded, with a box | `loaded=false`: models do not load at all here; send the line. |
@@ -121,6 +123,7 @@ The 3D window needs GPS (it uses GPS's look and switches with it). Stand anywher
    - Note anything that feels wrong: too fast or slow turning, jumps, the view tilting the wrong way, the wheel zooming the wrong way.
 5. **Look for:** triangles flickering or showing through each other (draw order), holes in the ground (culling), walls in the wrong colour, the image upside down or mirrored compared with the 2D map. While the view moves slowly, the ground should not look as if it lags or swims behind the edges of tiles (it skips updates under a quarter pixel; if it does, note it: setting `VO_EPS = 0` near the top of `GPS3D.lua` turns that off).
 6. **Other models.** `/gps3d trees` scatters trees, `/gps3d model <fileID>` places any model at the middle of the view (the chat line after 1.5 s says `loaded=true` or `false`; 7962574 is Forever's Stormwind City (one building model for the whole city, its lamps, trees and benches included), 106965 the Elwynn farmhouse), `/gps3d clear` removes them. Turn and zoom: models and your character should stay glued to the terrain and the arrow. If they slide as you zoom, try `/gps3d fov 0.7` and `/gps3d fov 1.0` and note which is better; `/gps3d fov` returns to automatic.
+7. **Buildings loaded on demand** (since 2026-10-22). The buildings and the models' data are no longer read at login: they load the first time the view comes near them (a band of the continent at a time, about a tile ahead). Turn the debug log on (section 14), `/reload` and note how long the loading screen takes compared with before (it should be shorter: about 0.2 s less in Lua). Then: (a) open the 3D view in Stormwind: buildings at once, `/gps3d test` lists `EK3 loaded (N ms)` (N is the hitch; expected 20 to 40 ms on a gaming PC); (b) in Free mode, zoomed to 300-500 yd, drag the view north from Stormwind toward Ironforge and on to the Undercity: buildings already standing when they come into view, never popping up as you watch, and at most a short stutter when a new band loads (the debug log's PERF lines say `3D data GPS3D_EK2 loaded for buildings in N ms`); (c) start a fight, then open the 3D view somewhere you have not looked yet this session: the ground shows without buildings and `/gps3d test` says `waits for combat to end`; when the fight ends the buildings appear (and no "Interface action failed" pop-up); (d) turn *Props and trees* on: the models' data loads then (`Models loaded` in `/gps3d test`). Send the debug log, and any stutter you notice with where you were.
 
 ## 8. Settings
 
@@ -216,6 +219,34 @@ A globe button chooses what the game's map key (Key Bindings, *Toggle World Map*
 
 The easiest hand-over is to copy these into a `testing/` folder in this repository.
 
+## 15. The performance probe (`/gps3d probe`)
+
+One command runs the in-game measurements the performance work needs (the review of 2026-10-22, section 2), about a minute, and puts everything back when it ends. Out of combat (it refuses in combat, and stops if a fight starts).
+
+1. Stand in Stormwind's Trade District, out of combat, nothing else moving you. Optional: `/gps debug on` first, so the lines also land in the debug log. Open the 3D view (`/gps3d`) and leave it as it opens: following you, straight down, 330 yd. Let it sit a few seconds.
+2. Type `/gps3d probe`. **Do not touch the mouse or the keys until it says `done`** (`/gps3d probe stop` ends it at once). For about 45 s it changes the ground and building detail six times (ground 800, 3,200, 6,400 with no buildings; buildings 2,000, 4,000, 8,000 with ground 3,200), each held still, redrawn and slowly turning by itself, and prints a line per setting: textures, the frame time, GPS3D's own Lua time, the calls a frame, and at the end an estimate of what one texture and one call cost the game.
+3. **When it says `TAKE A SCREENSHOT NOW`, press Print Screen** (the picture stays 10 s). Left: two checkerboard squares, each with one corner lifted; in each, one of the two diagonals (red: corners 1-4, blue: corners 2-3) stays straight and the other kinks: the straight one is the diagonal the game folds a bent texture along. Right: a bent triangle, and the same in a frame turned by `RotateTextures(0.5)` with a white ghost where it was: if the triangle still covers the ghost, only the image turned; if it sits turned off the ghost, the shape turned.
+4. Then the ground slides about 35 px on its own for 3 s without being redrawn (each depth frame moved by `SetPointsOffset`), with a red cross on the ground in the middle. **Watch the cross and your arrow**: do they stay on the same spot of the ground while it slides? At the end the ground is drawn again for real: does anything jump? (A strip of background at one edge while it slides is expected.)
+5. It says `done` and puts the settings, the camera and everything it made back. Send: the `GPS3D probe` chat lines (or `_classic_beta_\Logs\WoWChatLog.txt`, or `WTF\...\SavedVariables\GPS3D.lua` after a `/reload`: `GPS3D_DB.probe` keeps the last run's lines), the screenshot, and one sentence on step 4. Lines that say `missing` or `error` are answers too (that API is not there, or refused). If you can, run it a second time in open country (Westfall) and send both.
+
+## 16. The kept tile choice (perf round A1)
+
+Since 2026-10-22 the 3D view keeps its choice of ground tiles and building blocks between frames while the view
+moves little (the sandbox checks that nothing on the canvas is ever missing). In the game:
+
+1. `/gps debug on`, open the 3D view over Stormwind (straight down, following you), walk around for half a minute,
+   turn the view slowly with the right mouse button, then zoom out to about 5,000 yd over open country and pan.
+2. Look at the window's edges while walking and turning: ground or buildings must never appear late there (a
+   blank strip or a building popping up at the edge). Buildings far from you at the edge of the building budget
+   may change level a frame or three late, as before within a few frames.
+3. Send the PERF lines (`/reload`, then the saved variables): "3D: N frames drawn (K kept the tile choice), x ms
+   average". In the sandbox about three quarters of the frames are kept while walking, half to two thirds far out;
+   the ms average should be lower than before the update at the same place (the sandbox: 8-9 % of the Lua frame
+   in Stormwind, 12-18 % far out).
+4. If something does appear late at an edge, mark the moment (`/gps debug mark late ground at the edge`) and send
+   the log with a screenshot; the kept choice can be switched off in code (`ns.choice.off = true` in `GPS3D.lua`)
+   to compare.
+
 ## Known risks and what fixes them
 
 - **The planet and the 2D map's two continents: the game's world map gives no layout, or a different one.** GPS (`World.lua`) then places the continents by the classic world map's numbers (section 12, line 1); if the game's numbers differ a lot from those, the planet still works but the continents sit as the game's world map has them. The land pages (`Globe\Land_*.tga`, 512 x 512, 32-bit) not loading would leave the continents missing on the planet beyond about 25,000 yards: the `planet:` images line says so.
@@ -240,6 +271,7 @@ The easiest hand-over is to copy these into a `testing/` folder in this reposito
 | Map pins draw over the rings | Pin frame levels above 9500 in this client | Send a screenshot; raise `CHROME_LEVEL` in `MapWindow.lua` |
 | "Interface action failed because of an AddOn" after using the traditional map | Taint from Blizzard's map code run by GPS | Send the message and what you clicked; the data provider list in `MapWindow.lua` can be cut down |
 | Mode ring says the 3D view needs GPS3D | `GPS3D` folder not copied, or out of date | Copy `prototypes/GPS3D` again; tick it in the AddOns list |
+| `GPS3D: could not load GPS3D_... (...)` in chat, no buildings in one region | That data folder not copied, disabled or out of date | Copy every `prototypes/GPS3D*` folder; tick them in the AddOns list; `/reload` |
 | Triangles flicker or poke through | Draw-order buckets too coarse | More bucket frames, or sort per building |
 | `quests: 0 zones on this map` | GPS found no uiMap at the points it tried on this map | Send the line and where you stood; the zone search in `Quests.lua` (`ZonesOn`) needs another starting point |
 | Quest markers away from where Blizzard's map puts them | `C_Map.GetWorldPosFromMapPos` axis order differs from what GPS assumes | Send a screenshot of both maps at the same place; swap the axes in `Quests.lua` (`Q.ToGrid`) |

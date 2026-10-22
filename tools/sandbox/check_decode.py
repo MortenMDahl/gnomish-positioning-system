@@ -7,11 +7,13 @@ exec(compile(src, 'setup', 'exec'))
 TILE = 1600 / 3; BLOCK = TILE / 8; STEP = TILE / 512
 L.execute('''
 function BLOCKSUMS(map, tx, ty, bi, level)
-  local g = SANDBOX.namespaces.GPS3D.BlockGeo(map, tx, ty, bi, level)
+  local ns = SANDBOX.namespaces.GPS3D
+  local g = ns.BlockGeo(map, tx, ty, bi, level)
+  local idx, vc, pal = ns.BlockTris(g, {}, {}, {}) -- (decoded from the block's string when asked, since A4)
   local sx, sy, sh, sc, si = 0, 0, 0, 0, 0
-  for k = 1, #g.vx do sx = sx + g.vx[k]; sy = sy + g.vy[k]; sh = sh + g.vh[k]; sc = sc + g.vc[k] * k end
-  for k = 1, #g.idx do si = si + g.idx[k] * k end
-  return #g.vx, g.nt, sx, sy, sh, sc, si, #g.pal
+  for k = 1, #g.vx do sx = sx + g.vx[k]; sy = sy + g.vy[k]; sh = sh + g.vh[k]; sc = sc + vc[k] * k end
+  for k = 1, #idx do si = si + idx[k] * k end
+  return #g.vx, g.nt, sx, sy, sh, sc, si, #pal
 end''')
 lua_sums = G.BLOCKSUMS
 t0 = time.time(); blocks = bad = 0

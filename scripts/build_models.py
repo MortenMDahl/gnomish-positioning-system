@@ -1,6 +1,9 @@
-"""Turns the model-placement export (scripts/browser_export_models.js) into prototypes/GPS3D/Data/Models_<map>.lua.
+"""Turns the model-placement export (scripts/browser_export_models.js) into prototypes/GPS3D_Models/Models_<map>.lua,
+the load-on-demand data addon GPS3D's OnDemand.lua loads the first time the 3D view shows the game's models
+(props and trees on, or the game's buildings chosen; since 2026-10-22: 8 MB, about 30 ms in Lua 5.1, never
+loaded with the default settings).
 
-Usage: python scripts/build_models.py data/models.json [--out prototypes/GPS3D/Data] [--toc prototypes/GPS3D/GPS3D.toc]
+Usage: python scripts/build_models.py data/models.json [--root prototypes]
 
 Per map, two things (base64 digits, most significant first, as the other data files):
   ns.ModelFiles[map]  the map's models, 15 characters each: FileDataID (5), kind (1: 0 M2, 1 WMO, 2 WMO that is a cave or mine),
@@ -14,12 +17,16 @@ Per map, two things (base64 digits, most significant first, as the other data fi
 Every placement is decoded again and compared with the export before the file is written (position
 within 1/100 yard, angles within 0.1 degree, scale within 0.25 %), and the order checked: biggest
 first by the size GPS3D computes from the stored numbers (so it can stop at the first one too small). Placements of models that could not
-be read (no size) are left out. The TOC's Models lines are rewritten (before GPS3D.lua).
+be read (no size) are left out. GPS3D_Models.toc is rewritten; GPS3D.toc lists no Models file.
 """
 import json
 import math
 import os
 import sys
+
+from data_addons import drop_toc_lines, write_addon
+
+ADDON = 'GPS3D_Models'
 
 B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 VAL = {c: i for i, c in enumerate(B64)}
@@ -134,16 +141,16 @@ def check_map(mp, files, tiles):
 
 
 def main(argv):
-    out, toc = 'prototypes/GPS3D/Data', 'prototypes/GPS3D/GPS3D.toc'
+    root = 'prototypes'  # the addon folders: GPS3D and its data addons
     args = []
     i = 0
     while i < len(argv):
-        if argv[i] == '--out':
-            out = argv[i + 1]; i += 2
-        elif argv[i] == '--toc':
-            toc = argv[i + 1]; i += 2
+        if argv[i] == '--root':
+            root = argv[i + 1]; i += 2
         else:
             args.append(argv[i]); i += 1
+    out = os.path.join(root, ADDON)
+    os.makedirs(out, exist_ok=True)
     data = json.load(open(args[0]))
     stamp = data.get('exportedAt', '?')
     build = data.get('build', '?')
@@ -175,12 +182,9 @@ def main(argv):
         names.append(name)
         print(f'{name}: {checked} placements ({caves} caves and mines; {dropped} without a size left out), {len(mp["models"])} models, {len(tiles)} tiles, {len(text) / 1e6:.2f} MB')
     print(f'total: {total} placements checked and written ({total_caves} caves and mines), {total_dropped} left out, {len(names)} files')
-    if toc and os.path.exists(toc):
-        lines = [l for l in open(toc).read().split('\n') if not (l.startswith('Data\\Models_') and l.endswith('.lua'))]
-        at = lines.index('GPS3D.lua')
-        lines[at:at] = ['Data\\' + n for n in names]
-        open(toc, 'w', newline='\n').write('\n'.join(lines))
-        print(f'{toc}: {len(names)} Models lines')
+    write_addon(root, ADDON, 'the game\'s models', 'Where the game\'s props, trees and buildings stand on every map (GPS 3D\'s models).', names)
+    toc = drop_toc_lines(root, 'Data\\Models_')  # (GPS3D.toc listed them until 2026-10-22)
+    print(f'{os.path.join(out, ADDON + ".toc")}: {len(names)} files; {toc}: no Models lines')
 
 
 if __name__ == '__main__':

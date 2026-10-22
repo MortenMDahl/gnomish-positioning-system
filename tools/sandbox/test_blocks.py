@@ -65,6 +65,7 @@ function J2_SNAP(track)
   end
   -- the block's box (its square, its lowest and highest vertex) against the view's five planes (40 px round the canvas)
   local kx, ky = halfW / F, halfH / F
+  local kx40, ky40, kx2, ky2 = kx, ky, (w / 2 + 2) / F, (h / 2 + 2) / F
   local function inView(x0, x1, y0, y1, lo, hi)
     local near, left, right, below, above = true, true, true, true, true
     for c = 0, 7 do
@@ -82,7 +83,7 @@ function J2_SNAP(track)
     end
     return not (near or left or right or below or above)
   end
-  local inview, raised, lv = 0, 0, { 0, 0, 0 }
+  local inview, raised, lv, canvasFlat = 0, 0, { 0, 0, 0 }, 0
   local far, sumd, nd = 0, { 0, 0, 0 }, { 0, 0, 0 } -- all blocks in view at the coarsest level; camera distance per level
   local flatD, raisedD = math.huge, 0 -- nearest flat block, furthest raised one (from the camera)
   local chosen = {} -- blocks the code chose to draw raised this frame (ns.blockList, e.lv > 0; none before 2026-10-21)
@@ -110,6 +111,11 @@ function J2_SNAP(track)
                 far = far + tf.nt[bi]
                 local lo, hi = Range(tb, map, tx, ty, bi)
                 local dc = math.sqrt((x0 + B / 2 - cx) ^ 2 + (y1 - B / 2 - cy) ^ 2 + (math.min(hi, math.max(lo, cz)) - cz) ^ 2) -- (to the block's middle, at the camera's height within the block's)
+                if l == 0 then -- (flat: does its box reach the canvas, 2 px round it, where triangles are cut?)
+                  kx, ky = kx2, ky2
+                  if inView(x0, x0 + B, y1 - B, y1, lo, hi) then canvasFlat = canvasFlat + 1 end
+                  kx, ky = kx40, ky40
+                end
                 if l > 0 then
                   raised = raised + 1; lv[l] = lv[l] + 1; sumd[l] = sumd[l] + dc; nd[l] = nd[l] + 1
                   if dc > raisedD then raisedD = dc end
@@ -137,7 +143,7 @@ function J2_SNAP(track)
   end
   prev = cur
   local function mean(l) return nd[l] > 0 and sumd[l] / nd[l] or -1 end
-  return inview, raised, lv[1], lv[2], lv[3], appear, gone, change, far, mean(1), mean(2), mean(3), flatD, raisedD, pending
+  return inview, raised, lv[1], lv[2], lv[3], appear, gone, change, far, mean(1), mean(2), mean(3), flatD, raisedD, pending, canvasFlat
 end
 -- triangles of building meshes drawn this frame that were not drawn before (made this frame: the per-frame cap)
 local seen = setmetatable({}, { __mode = "k" })
@@ -191,10 +197,10 @@ for name, X, Y, m in PLACES:
             ms = frame_ms()
             view(X, Y, m, dist, pitch); settle()
             r = list(G.J2_SNAP(False))
-            rows.append((name, pitch, dist, r[0], r[1], r[2], r[3], r[4], int(st.detailTris), ms, r[8], r[9:12], r[12], r[13], st.detailPx))
+            rows.append((name, pitch, dist, r[0], r[1], r[2], r[3], r[4], int(st.detailTris), ms, r[8], r[9:12], r[12], r[13], st.detailPx, r[15]))
 mem1 = G.J2_MEM()
 print('\nplace                            tilt  dist  in view  raised  share   fine/coarse/far  tris   frame ms   all at far level')
-for name, pitch, dist, iv, rs, l1, l2, l3, tris, ms, far, means, flatD, raisedD, T in rows:
+for name, pitch, dist, iv, rs, l1, l2, l3, tris, ms, far, means, flatD, raisedD, T, cf in rows:
     print(f'{name:32s} {("down" if pitch > 89 else "45"):>4s} {dist:5d} {iv:7d} {rs:7d} {100 * rs / max(iv, 1):5.0f} %  {l1:4d}/{l2:4d}/{l3:4d}  {tris:5d}  {ms:6.2f}   {far:6d} tris' + (f', threshold {T:.1f} px' if T else ''))
 print(f'Lua memory after the views: {mem1:.0f} MB ({mem1 - mem0:+.0f} MB over the start)')
 
@@ -215,7 +221,7 @@ for name, X, Y, m in PLACES:
             worst = max(worst, a + g + c)
             flat += iv - rs
             pend += r[14]
-            if r[8] <= BUDGET: fits_flat += iv - rs  # flat although every block fits at its coarsest level
+            if r[8] <= BUDGET: fits_flat += r[15]  # flat on the canvas although every block fits at its coarsest level
             nt_, nb_ = G.J2_NEWTRIS()
             new_most = max(new_most, nt_)
             if nt_ > 1500 and nb_ > 1: new_over += 1
@@ -258,8 +264,11 @@ def check(name, ok, detail=''):
     results.append((name, bool(ok))); print(('PASS' if ok else 'FAIL'), name, detail)
 fits = [r for r in rows if r[10] <= BUDGET]
 over = [r for r in rows if r[10] > BUDGET]
-check('every block in view within reach is drawn raised, close up and further out, straight down and tilted, at Orgrimmar and Stormwind (where all fit the budget at their coarsest level)',
-      len(fits) >= 12 and all(r[4] == r[3] > 0 for r in fits), f'{len(fits)} views: ' + str([(r[0][:9], r[1], r[2], r[4], r[3]) for r in fits if r[4] < r[3]]))
+# (blocks reaching the canvas: since 2026-10-22 the choice is kept between frames while the view moves little,
+# GPS3D.lua's ns.choice, so a block only in the 40 px margin round the canvas may wait for the next full choice;
+# none on the canvas does, tools/sandbox/test_choice.py)
+check('every block in view within reach is drawn raised (reaching the canvas), close up and further out, straight down and tilted, at Orgrimmar and Stormwind (where all fit the budget at their coarsest level)',
+      len(fits) >= 12 and all(r[15] == 0 and r[3] > 0 for r in fits), f'{len(fits)} views: ' + str([(r[0][:9], r[1], r[2], r[4], r[3], r[15]) for r in fits if r[4] < r[3]]) + ' (place, tilt, distance, raised, in view with the margin, flat on the canvas)')
 check('where they do not (tilted, 300 yd: every block at the coarsest level is over the budget), the budget is used up and those nearest the camera are drawn raised',
       all(r[8] > BUDGET - 120 and r[13] <= r[12] for r in over), str([(r[0][:9], r[2], r[4], r[3], r[10], r[8], round(r[13]), round(r[12])) for r in over]))
 check('building triangles within the budget in every view', all(r[8] <= BUDGET for r in rows), f'most {max(r[8] for r in rows)}')
@@ -272,7 +281,7 @@ before_events = BEFORE_ZOOM_EVENTS
 check('zooming in slowly: fewer blocks pop (appear, go flat or change level) at every view, under half as many in all, at most 6 in any frame',
       all(sum(z[3]) <= b for z, b in zip(zoom, before_events)) and sum(sum(z[3]) for z in zoom) * 2 <= sum(before_events) and all(z[4] <= 6 for z in zoom),
       f'{[sum(z[3]) for z in zoom]} events (before {before_events}), worst frame {max(z[4] for z in zoom)} (before 17)')
-check('zooming in slowly: no block in view flat in frames where all fit the budget at their coarsest level (a block whose mesh is still to be made shows another level of it meanwhile)',
+check('zooming in slowly: no block on the canvas flat in frames where all fit the budget at their coarsest level (a block whose mesh is still to be made shows another level of it meanwhile)',
       all(z[6] <= 1 and z[7] == 0 for z in zoom), f'{[round(z[6], 2) for z in zoom]} waiting a frame, {[z[7] for z in zoom]} flat in frames where all fit')
 check('zooming in slowly: at most 1,500 building triangles made into textures in a frame (BUILD_LIMIT; a single bigger block alone)', new_most > 0 and new_over == 0, f'most {new_most}, frames over {new_over}')
 check('coarser levels: no steep triangle shows the minimap image stretched down it (the Mage Quarter, tilted)', streaks[1] + streaks[2] > 100 and streaks[4] + streaks[5] == 0,
