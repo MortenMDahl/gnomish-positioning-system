@@ -32,6 +32,10 @@ Effect (sandbox, Stormwind, buildings on, budget 4000), before -> after:
 | ground only, turning | 6.2 -> 5.0 | 6,476 -> 6,445 | 90 -> 65 KB |
 | running fast, new blocks | 54.5 -> 43.9 | 24,233 -> 22,976 | 920 -> 504 KB |
 
+## GPS as the minimap (2026-10-22, `Minimap.lua`)
+
+The minimap is on screen all the time, so it draws only when the camera moved (you moved more than 0.01 yd, turned, the zoom, size or tilt changed) or building blocks wait to be made, at its own budgets (1,200 ground and 1,500 building triangles against the 3D window's 3,200 and 4,000), and only the ground and blocks (no models, markers or arrow); the per-vertex skips (`VO_EPS`) and the kept choice (A1) work as in the 3D window. Sandbox (`test_minimap.py`, Stormwind's Trade District, zoom 0, 233 yd to the rim, Lua 5.4), per frame: standing still 0.01 ms and no texture calls (no redraw); walking 0.25 yd a frame 1.8 ms, about 1,300 texture calls, 1,700 textures shown, against the 3D window walking the same path 7.8 ms, 18,200 calls, 4,500 textures; turning (Rotate Minimap on, 3 degrees a frame) 7.6 ms and 11,100 calls, every vertex moving. The round mask is one `AddMaskTexture` per texture when the minimap takes the canvas (about 5,900 calls once, the whole pool), none per frame; what masks cost the client per frame is not known (TESTING.md section 17). Memory: nothing of its own beyond GPS3D's caches (Lua heap after walking 300 frames 22.6 MB, off 22.7 MB).
+
 ## Applied (2026-10-22, perf round A5): building and model data loaded on demand
 ## Applied (2026-10-22, perf round, step "probe"): `/gps3d probe`, the in-game measurements
 

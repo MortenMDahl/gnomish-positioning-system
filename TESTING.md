@@ -32,6 +32,7 @@ Everything below is installed in `_forever_` and `_classic_beta_` (GitHub `globe
    - Track a quest with an area: the 3D view shows it on the ground like 2D; `/gps3d test` `quest areas:` line.
    - Blizzard's map: the globe left of the maximize arrow; click it, then M opens GPS; GPS's globe goes back; the full-screen arrow in each mode; `/gps test` `map key:` line; no "Interface action failed".
 4. **The performance round (2026-10-22):** with `/gps debug on`, pan and turn in the 3D view over a city and far out (dragging the map is enough, no walking): ground or buildings must never appear late at the window's edges (section 16); a short stutter the first time a new area's buildings load?; switch *Props and trees* on in the settings with the camera still: they should appear without moving. Send the PERF and MEMORY lines after `/reload`.
+5. **GPS as the minimap (2026-10-22, no travelling needed).** Options > AddOns > GPS > *Use GPS as minimap* (or `/gps minimap on`). The minimap at the top right should show GPS's tilted view round you, round like the minimap, with the game's own arrow, blips, zoom buttons and ring on top; walk a few steps and turn; zoom with the minimap's + / - and the wheel; toggle the game's *Rotate Minimap* option; open and close the 3D window; turn it off. Screenshot it on and off, and send `/gps minimap` and any "Interface action failed" line. Details: section 17.
 
 ## 0. Before you start
 
@@ -263,6 +264,20 @@ moves little (the sandbox checks that nothing on the canvas is ever missing). In
 4. If something does appear late at an edge, mark the moment (`/gps debug mark late ground at the edge`) and send
    the log with a screenshot; the kept choice can be switched off in code (`ns.choice.off = true` in `GPS3D.lua`)
    to compare.
+
+## 17. GPS as the minimap (`/gps minimap`, since 2026-10-22)
+
+GPS3D's `Minimap.lua` draws GPS's tilted view under Blizzard's minimap the way Blizzard's own hybrid minimap draws its map: a frame under the Minimap widget and the minimap's ground art switched off (`C_Minimap.SetDrawGroundTextures(false)`), so the game's arrow, blips, quest icons and buttons stay on top. Off by default. No travelling needed; any outdoor spot with buildings near (Orgrimmar) is best.
+
+1. **On.** *Use GPS as minimap* on GPS's settings page, or `/gps minimap on`. Expect at once: the minimap shows GPS's view (ground and buildings standing up, tilted about 35 degrees), round, the gold ring and buttons as before, your arrow in the middle. `/gps minimap` says `on: GPS's view in the minimap, tilted 35, north up, ... yd to the rim`. If the minimap stays Blizzard's, the line says why (indoors, in an instance, no position ...). If the minimap is black or shows Blizzard's art over GPS's, send a screenshot: then `SetDrawGroundTextures` or the BACKGROUND strata behave differently than the source says.
+2. **Shape.** The view should stop at the minimap's round edge. Square corners showing past the ring mean the mask (`TempPortraitAlphaMask` on every texture) does not work on bent textures: say so.
+3. **Blips.** Track herbs or minerals (or stand near party members, a flight master, a quest objective): the game's icons should sit on the spot of GPS's ground they mark (a few px off near the rim at most). Icons clearly off (more than about 10 px) mean the minimap's scale differs from `C_Minimap.GetViewRadius()`.
+4. **Moving and turning.** Walk and turn: the view follows smoothly. With the game's option *Rotate Minimap* on, the view turns with you (the way you face up); off, north up. Zoom with the minimap's + / - and the mouse wheel over it: GPS's view zooms with the blips (about 67 to 233 yd to the rim).
+5. **Click.** A click on the minimap still pings (the game's), the tooltips over blips still work.
+6. **3D window.** Open GPS's 3D view: the minimap shows Blizzard's art while it is open, and GPS's again when it closes. The 3D view must look and work as before.
+7. **Indoors / instances.** Walk into a building with an indoor minimap (a cave, a big building): Blizzard's minimap comes back by itself, GPS's when you step out. A dungeon: Blizzard's.
+8. **Off.** Turn it off: the minimap exactly as before (art, shape, buttons). Do it once in combat too: nothing refused.
+9. **Cost.** With `/gps debug on`, stand still a minute, then walk and turn for a minute with the minimap on, then the same with it off; `/reload` and send the PERF lines (the game's fps). In the sandbox it costs nothing standing still and about a quarter of the 3D window's frame walking.
 
 ## Known risks and what fixes them
 

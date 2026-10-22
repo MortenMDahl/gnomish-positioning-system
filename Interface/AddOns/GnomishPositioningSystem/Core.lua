@@ -1424,6 +1424,10 @@ SlashCmdList.GPS = function(msg)
 		ns.SetFullScreen(not ns.IsFullScreen())
 	elseif cmd == "mapkey" or cmd:match("^mapkey%s") then
 		if ns.mapkey then ns.mapkey.Command(cmd:match("^mapkey%s*(.-)$")) end
+	elseif cmd == "minimap" or cmd:match("^minimap%s") then
+		-- GPS3D's view as the minimap (GPS3D's Minimap.lua): /gps minimap on|off, or the state
+		if GPS3D_API and GPS3D_API.Minimap then GPS3D_API.Minimap(cmd:match("^minimap%s*(.-)$"))
+		else print("|cff33ff99GPS|r: the minimap needs GPS3D") end
 	elseif cmd == "options" or cmd == "settings" or cmd == "config" then
 		ns.OpenSettings()
 	else

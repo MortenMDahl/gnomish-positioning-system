@@ -7,6 +7,8 @@
 #                                 button atlases (an arrow to the top right corner, or back from it)
 #   questpoi.png                  Interface\WorldMap\UI-QuestPoi-NumberIcons (the quest button's disc; tinted)
 #   questblob.png                 a quest's objective area (the game draws these itself, QuestPOIFrame)
+#   atlas-ui-hud-minimap-frame.png   the minimap's ring (Camelot's UI-HUD-Minimap-Frame, 215 x 226 round a 198 px minimap)
+#   atlas-ui-hud-minimap-zoom-in.png, -zoom-out.png   the minimap's zoom buttons
 # Usage: python make_standins.py
 import os
 from PIL import Image, ImageDraw, ImageFilter
@@ -84,7 +86,23 @@ def questblob():
     d.ellipse([S * 0.04, S * 0.04, S * 0.96, S * 0.96], fill=(240, 200, 60, 70), outline=(255, 215, 80, 200), width=int(S * 0.025))
     done(im, n, 'questblob.png')
 
-disc(); glow(); questpoi(); questblob()
+def minimapframe():
+    # 215 x 226 like the atlas; the minimap (198 px) centred, a gold ring over its edge and a knob at the top
+    W, H = 215 * 4, 226 * 4; im = Image.new('RGBA', (W, H), (0, 0, 0, 0)); d = ImageDraw.Draw(im)
+    cx, cy, r = W / 2, H / 2, 99 * 4
+    d.ellipse([cx - r - 9 * 4, cy - r - 9 * 4, cx + r + 9 * 4, cy + r + 9 * 4], outline=(40, 28, 10, 255), width=12 * 4)
+    d.ellipse([cx - r - 7 * 4, cy - r - 7 * 4, cx + r + 7 * 4, cy + r + 7 * 4], outline=(196, 160, 82, 255), width=8 * 4)
+    d.ellipse([cx - r - 4 * 4, cy - r - 4 * 4, cx + r + 4 * 4, cy + r + 4 * 4], outline=(240, 214, 140, 255), width=2 * 4)
+    im.resize((215, 226), Image.LANCZOS).save(os.path.join(UI, 'atlas-ui-hud-minimap-frame.png')); print('wrote atlas-ui-hud-minimap-frame.png')
+
+def zoombutton(sign):
+    n = 17; im = canvas(n); d = ImageDraw.Draw(im); S = n * K
+    d.ellipse([S * 0.05, S * 0.05, S * 0.95, S * 0.95], fill=(40, 28, 10, 255), outline=(196, 160, 82, 255), width=int(S * 0.1))
+    d.rectangle([S * 0.28, S * 0.45, S * 0.72, S * 0.55], fill=(240, 214, 140, 255))
+    if sign == 'in': d.rectangle([S * 0.45, S * 0.28, S * 0.55, S * 0.72], fill=(240, 214, 140, 255))
+    done(im, n, 'atlas-ui-hud-minimap-zoom-%s.png' % sign)
+
+disc(); glow(); questpoi(); questblob(); minimapframe(); zoombutton('in'); zoombutton('out')
 for kind in ('expand', 'condense'):
     for state in ('up', 'pressed'): redarrow(kind, state)
 redx('up'); redx('pressed'); redx('highlight')

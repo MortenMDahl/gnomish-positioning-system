@@ -46,4 +46,5 @@ Models.lua
 Globe.lua
 QuestAreas.lua
 OnDemand.lua
+Minimap.lua
 Probe.lua

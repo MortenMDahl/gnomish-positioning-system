@@ -387,6 +387,7 @@ local function AcquireTex(f)
 		tex:Hide()
 		tex.bucketFrame = f
 		poolMade = poolMade + 1
+		if ns.miniMask then tex:AddMaskTexture(ns.miniMask); tex.gpsMask = true end -- (drawn in the minimap: its round mask, Minimap.lua)
 	end
 	return tex
 end
@@ -1085,7 +1086,10 @@ local function CameraBasis()
 	local sy_, cy_, sp, cp = sin(yaw), cos(yaw), sin(p), cos(p)
 	local fx, fy, fz = sy_ * cp, cy_ * cp, -sp
 	local rx, ry = cy_, -sy_
-	local ux, uy, uz = sy_ * sp, cy_ * sp, cp
+	-- (cam.stretch: the minimap's screen up stretched by 1 / sin(tilt), so the ground at your height keeps the flat
+	-- minimap's proportions and Blizzard's blips stay on their spot, Minimap.lua; nil in the 3D window)
+	local k = cam.stretch or 1
+	local ux, uy, uz = sy_ * sp * k, cy_ * sp * k, cp * k
 	local cx, cy, cz = cam.x - fx * cam.dist, cam.y - fy * cam.dist, cam.th + Lift() - fz * cam.dist
 	return fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz
 end
@@ -1106,6 +1110,8 @@ ns.Project = Project
 local function ScreenRay(px, py)
 	local F = Focal()
 	local fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz = CameraBasis()
+	local k = cam.stretch or 1 -- (up is k long: the ray through py goes py / k^2 of it)
+	py = py / (k * k)
 	return cx, cy, cz, fx + rx * px / F + ux * py / F, fy + ry * px / F + uy * py / F, fz + uz * py / F
 end
 
@@ -1332,7 +1338,7 @@ local function ChooseTiles(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz, steps)
 	local list, ng = Lod.list, 0
 	local ring, reach = false, (range + slack) ^ 2
 	local kw, kh = halfW / F, halfH / F
-	local nw, nh = sqrt(1 + kw * kw), sqrt(1 + kh * kh)
+	local nw, nh = sqrt(1 + kw * kw), sqrt((cam.stretch or 1) ^ 2 + kh * kh) -- (up's length: 1, or the minimap's stretch)
 	local tx0, tx1, ty0, ty1 = max(0, floor(tgx) - r), min(63, floor(tgx) + r), max(0, floor(tgy) - r), min(63, floor(tgy) + r)
 	local blocks = Lod.Blocks(map)
 	for by = floor(ty0 / 4), floor(ty1 / 4) do
@@ -2622,6 +2628,7 @@ frame:SetScript("OnSizeChanged", function() Render() end)
 local pendingFocus -- { map, gx, gy } from the 2D map: open there instead of on you
 
 local function Open()
+	if ns.MinimapYield then ns.MinimapYield() end -- the minimap gives the canvas and the camera back (Minimap.lua)
 	GPS3D_DB = GPS3D_DB or {}
 	markerMode = GPS3D_DB.marker or markerMode
 	if GPS3D_DB.detail ~= nil then useDetail = GPS3D_DB.detail end
@@ -2928,6 +2935,8 @@ ns.SetModelYaw = function(degrees) ns.DB().modelYaw = rad(degrees); ns.Redraw() 
 -- for /gps3d probe (Probe.lua): the live budgets and buildings switch (to put them back after), and the
 -- marker-only redraw
 ns.Budgets = function() return TRI_BUDGET, DETAIL_BUDGET, useDetail end
+ns.SetBudgets = function(grid, buildings) TRI_BUDGET, DETAIL_BUDGET = grid, buildings end -- (not saved: the minimap's own, Minimap.lua)
+ns.RenderWorld = RenderWorld -- (the ground and buildings only: the minimap, Minimap.lua)
 ns.RenderMarker = RenderMarker
 
 GPS3D_API.settings = {

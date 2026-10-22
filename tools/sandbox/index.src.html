@@ -213,6 +213,9 @@ details.panel .fake { color: var(--warn); }
           <button data-cmd="/gps test">/gps test</button>
           <button data-cmd="/gps grid">/gps grid</button>
           <button data-cmd="/gps options">/gps options</button>
+          <button data-cmd="/gps minimap on">minimap on</button>
+          <button data-cmd="/gps minimap off">minimap off</button>
+          <button data-cmd="/gps3d probe">/gps3d probe</button>
           <button data-cmd="/gps debug on">/gps debug on</button>
           <button data-cmd="/gps3d test">/gps3d test</button>
           <button data-cmd="/gps3d pretend">/gps3d pretend</button>
@@ -261,7 +264,7 @@ const TILE = 1600 / 3;
 // ADDONS-BEGIN
 const ADDONS = [
   {"name": "GnomishPositioningSystem", "files": ["Data/MapTiles.lua", "Debug.lua", "Core.lua", "World.lua", "MapWindow.lua", "Quests.lua", "Compat.lua", "MapKey.lua", "Settings.lua"], "saved": "GnomishPositioningSystemDB,GnomishPositioningSystemLog"},
-  {"name": "GPS3D", "files": ["Data/World_0.lua", "Data/World_1.lua", "Data/World_30.lua", "Data/World_33.lua", "Data/World_36.lua", "Data/World_47.lua", "Data/World_169.lua", "Data/World_209.lua", "Data/World_289.lua", "Data/World_309.lua", "Data/World_329.lua", "Data/World_469.lua", "Data/World_489.lua", "Data/World_509.lua", "Data/World_529.lua", "Data/World_531.lua", "Data/DetailParts.lua", "Data/Globe.lua", "Data/Lod_0.lua", "Data/Lod_1.lua", "Data/Lod_30.lua", "Data/Lod_33.lua", "Data/Lod_36.lua", "Data/Lod_47.lua", "Data/Lod_169.lua", "Data/Lod_209.lua", "Data/Lod_289.lua", "Data/Lod_309.lua", "Data/Lod_329.lua", "Data/Lod_469.lua", "Data/Lod_489.lua", "Data/Lod_509.lua", "Data/Lod_529.lua", "Data/Lod_531.lua", "GPS3D.lua", "Terrain.lua", "Models.lua", "Globe.lua", "QuestAreas.lua", "OnDemand.lua", "Probe.lua"], "saved": "GPS3D_DB"},
+  {"name": "GPS3D", "files": ["Data/World_0.lua", "Data/World_1.lua", "Data/World_30.lua", "Data/World_33.lua", "Data/World_36.lua", "Data/World_47.lua", "Data/World_169.lua", "Data/World_209.lua", "Data/World_289.lua", "Data/World_309.lua", "Data/World_329.lua", "Data/World_469.lua", "Data/World_489.lua", "Data/World_509.lua", "Data/World_529.lua", "Data/World_531.lua", "Data/DetailParts.lua", "Data/Globe.lua", "Data/Lod_0.lua", "Data/Lod_1.lua", "Data/Lod_30.lua", "Data/Lod_33.lua", "Data/Lod_36.lua", "Data/Lod_47.lua", "Data/Lod_169.lua", "Data/Lod_209.lua", "Data/Lod_289.lua", "Data/Lod_309.lua", "Data/Lod_329.lua", "Data/Lod_469.lua", "Data/Lod_489.lua", "Data/Lod_509.lua", "Data/Lod_529.lua", "Data/Lod_531.lua", "GPS3D.lua", "Terrain.lua", "Models.lua", "Globe.lua", "QuestAreas.lua", "OnDemand.lua", "Minimap.lua", "Probe.lua"], "saved": "GPS3D_DB"},
   {"name": "GPS3D_EK1", "files": ["Link.lua", "Detail_0_1.lua"], "lod": true},
   {"name": "GPS3D_EK2", "files": ["Link.lua", "Detail_0_2.lua"], "lod": true},
   {"name": "GPS3D_EK3", "files": ["Link.lua", "Detail_0_3.lua"], "lod": true},
@@ -421,15 +424,16 @@ if (!gl) throw new Error("WebGL is not available in this browser");
 const prog = (() => {
   const vs = `attribute vec2 p; attribute vec2 t; attribute vec4 c; uniform vec2 s; varying vec2 vt; varying vec4 vc;
     void main(){ gl_Position = vec4(p.x / s.x * 2.0 - 1.0, p.y / s.y * 2.0 - 1.0, 0.0, 1.0); vt = t; vc = c; }`;
-  const fs = `precision mediump float; uniform sampler2D tex; uniform vec4 uvr; varying vec2 vt; varying vec4 vc;
-    void main(){ gl_FragColor = texture2D(tex, uvr.xy + vt * uvr.zw) * vc; }`;
+  const fs = `precision mediump float; uniform sampler2D tex; uniform vec4 uvr; uniform vec4 ell; varying vec2 vt; varying vec4 vc;
+    void main(){ if (ell.z > 0.0) { vec2 d = (gl_FragCoord.xy - ell.xy) / ell.zw; if (dot(d, d) > 1.0) discard; }
+      gl_FragColor = texture2D(tex, uvr.xy + vt * uvr.zw) * vc; }`;
   const mk = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
   const p = gl.createProgram(); gl.attachShader(p, mk(gl.VERTEX_SHADER, vs)); gl.attachShader(p, mk(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
   return p;
 })();
 gl.useProgram(prog);
-const loc = { p: gl.getAttribLocation(prog, "p"), t: gl.getAttribLocation(prog, "t"), c: gl.getAttribLocation(prog, "c"), s: gl.getUniformLocation(prog, "s"), uvr: gl.getUniformLocation(prog, "uvr"), tex: gl.getUniformLocation(prog, "tex") };
+const loc = { p: gl.getAttribLocation(prog, "p"), t: gl.getAttribLocation(prog, "t"), c: gl.getAttribLocation(prog, "c"), s: gl.getUniformLocation(prog, "s"), uvr: gl.getUniformLocation(prog, "uvr"), ell: gl.getUniformLocation(prog, "ell"), tex: gl.getUniformLocation(prog, "tex") };
 const MAXQ = 12000;
 const vbuf = gl.createBuffer(), ibuf = gl.createBuffer();
 const vdata = new ArrayBuffer(MAXQ * 4 * 20), vf = new Float32Array(vdata), vu = new Uint8Array(vdata);
@@ -496,6 +500,9 @@ const UI_FILES = {
   "atlas:redbutton-expand-pressed": "ui/atlas-redbutton-expand-pressed.png",
   "atlas:redbutton-condense": "ui/atlas-redbutton-condense.png",
   "atlas:redbutton-condense-pressed": "ui/atlas-redbutton-condense-pressed.png",
+  "atlas:ui-hud-minimap-frame": "ui/atlas-ui-hud-minimap-frame.png",
+  "atlas:ui-hud-minimap-zoom-in": "ui/atlas-ui-hud-minimap-zoom-in.png",
+  "atlas:ui-hud-minimap-zoom-out": "ui/atlas-ui-hud-minimap-zoom-out.png",
   "interface\\addons\\gnomishpositioningsystem\\media\\needle": "ui/media-needle.png",
   "interface\\addons\\gnomishpositioningsystem\\media\\camfollow": "ui/media-camfollow.png",
   "interface\\addons\\gnomishpositioningsystem\\media\\cambehind": "ui/media-cambehind.png",
@@ -588,6 +595,8 @@ function ingest(s) {
   while (i < nums.length) {
     const k = +nums[i];
     if (k === 0) { clips.set(N(i + 1), [N(i + 2) / 4, N(i + 3) / 4, N(i + 4) / 4, N(i + 5) / 4]); i += 6; }
+    // a clip with a round mask (a texture given a MaskTexture): the rectangle (or none) and the ellipse's box
+    else if (k === 5) { const c = N(i + 2) ? [N(i + 3) / 4, N(i + 4) / 4, N(i + 5) / 4, N(i + 6) / 4] : [null]; c.ell = [N(i + 7) / 4, N(i + 8) / 4, N(i + 9) / 4, N(i + 10) / 4]; clips.set(N(i + 1), c); i += 11; }
     else if (k === 3) {
       const id = N(i + 1), key = dict.get(N(i + 2));
       const uv = new Float32Array(8); for (let j = 0; j < 8; j++) uv[j] = N(i + 3 + j) / 65535;
@@ -646,7 +655,10 @@ function draw() {
     if (clip !== curClip) {
       curClip = clip;
       const c = clips.get(clip);
-      if (c) { gl.enable(gl.SCISSOR_TEST); const x0 = Math.floor(c[0] * S), y0 = Math.floor(c[1] * S); gl.scissor(x0, y0, Math.ceil(c[2] * S) - x0, Math.ceil(c[3] * S) - y0); }
+      if (c && c.ell) { const e = c.ell; gl.uniform4f(loc.ell, (e[0] + e[2]) / 2 * S, (e[1] + e[3]) / 2 * S, (e[2] - e[0]) / 2 * S, (e[3] - e[1]) / 2 * S); }
+      else gl.uniform4f(loc.ell, 0, 0, 0, 0);
+      if (c && c[0] === null) gl.disable(gl.SCISSOR_TEST);
+      else if (c) { gl.enable(gl.SCISSOR_TEST); const x0 = Math.floor(c[0] * S), y0 = Math.floor(c[1] * S); gl.scissor(x0, y0, Math.ceil(c[2] * S) - x0, Math.ceil(c[3] * S) - y0); }
       else gl.disable(gl.SCISSOR_TEST);
     }
   };

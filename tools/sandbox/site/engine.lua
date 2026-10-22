@@ -405,6 +405,39 @@ function Texture:SetParent(p)
 	S.dirty = true
 end
 
+-- Mask textures (since 2026-10-22, GPS's minimap): a MaskTexture is a region that draws nothing; a texture given
+-- one with AddMaskTexture is drawn only inside the ellipse inscribed in the mask's rectangle (the masks GPS uses
+-- are round, Interface\CharacterFrame\TempPortraitAlphaMask); the page cuts it there (draw record 5).
+local MaskTexture = class("MaskTexture", Region)
+function MaskTexture:SetTexture(file) self._file = file; touch(); return true end
+function MaskTexture:SetAtlas(name) self._file = "atlas:" .. tostring(name); touch(); return true end
+function MaskTexture:GetTexture() return self._file end
+function MaskTexture:GetObjectType() return "MaskTexture" end
+function Frame:CreateMaskTexture(name)
+	local m = new(MaskTexture, self, name)
+	m._isMask = true
+	return m
+end
+function Texture:AddMaskTexture(m)
+	assert(type(m) == "table" and m._isMask, "AddMaskTexture: not a MaskTexture")
+	self._masks = self._masks or {}
+	for _, x in ipairs(self._masks) do if x == m then return end end
+	self._masks[#self._masks + 1] = m
+	S.maskCalls = (S.maskCalls or 0) + 1
+	self._sv = (self._sv or 0) + 1
+	touch()
+end
+function Texture:RemoveMaskTexture(m)
+	local ms = self._masks
+	if not ms then return end
+	for i = #ms, 1, -1 do if ms[i] == m then table.remove(ms, i) end end
+	S.maskCalls = (S.maskCalls or 0) + 1
+	self._sv = (self._sv or 0) + 1
+	touch()
+end
+function Texture:GetNumMaskTextures() return self._masks and #self._masks or 0 end
+function Texture:GetMaskTexture(i) return self._masks and self._masks[i] end
+
 ------------------------------------------------------------------------------------------------
 -- Font strings
 ------------------------------------------------------------------------------------------------
@@ -540,6 +573,20 @@ function Frame:CreateFontString(name, layer, inherits)
 	return fs
 end
 function Frame:SetFrameLevel(l) self._level = l; touch() end
+-- (a frame moved to another parent leaves the old one's children and joins the new one's, as in the game; since
+-- 2026-10-22, when GPS's minimap began moving GPS3D's canvas; levels are kept as they were, the game's own rule
+-- for them is not known here, so GPS sets them itself)
+function Frame:SetParent(p)
+	if type(p) == "string" then p = _G[p] end
+	local old = self._parent
+	if old == p then return end
+	if old and old._children then
+		for i = #old._children, 1, -1 do if old._children[i] == self then table.remove(old._children, i) break end end
+	end
+	self._parent = p
+	if p and p._children then p._children[#p._children + 1] = self end
+	relayout(self)
+end
 function Frame:GetFrameLevel() return self._level end
 function Frame:SetFrameStrata(s) self._strata = s:upper(); touch() end
 function Frame:GetFrameStrata()
@@ -564,6 +611,8 @@ function Frame:IsMouseWheelEnabled() return self._wheel end
 function Frame:EnableKeyboard() end
 function Frame:SetPropagateKeyboardInput() end
 function Frame:SetClipsChildren(on) self._clips = not not on; touch() end
+function Frame:SetFixedFrameStrata(on) self._fixedStrata = not not on end
+function Frame:SetFixedFrameLevel(on) self._fixedLevel = not not on end
 function Frame:DoesClipChildren() return self._clips end
 function Frame:SetMovable(on) self._movable = on end
 function Frame:IsMovable() return self._movable end
@@ -1869,7 +1918,7 @@ local function px(v) return floor(v * Q + 0.5) end
 local function uv(v) return floor(v * 65535 + 0.5) end
 local function c8(v) v = floor(v * 255 + 0.5); if v < 0 then return 0 elseif v > 255 then return 255 end return v end
 
-local clipIds, clipN
+local clipIds, clipN, clipRects
 local function clipId(f)
 	local l, b, r, t = clipOf(f)
 	if not l then return 0 end
@@ -1879,7 +1928,24 @@ local function clipId(f)
 		clipN = clipN + 1
 		id = clipN
 		clipIds[key] = id
+		clipRects[id] = { l, b, r, t }
 		push(0, id, px(l), px(b), px(r), px(t))
+	end
+	return id
+end
+-- a clip and a round mask (record 5: the clip's rectangle, or none, and the mask's ellipse's box)
+local function maskClipId(clip, m)
+	local el, eb, er, et = rect(m)
+	if not el then return clip end
+	local key = "m" .. clip .. ":" .. px(el) .. "," .. px(eb) .. "," .. px(er) .. "," .. px(et)
+	local id = clipIds[key]
+	if not id then
+		clipN = clipN + 1
+		id = clipN
+		clipIds[key] = id
+		local c = clipRects[clip]
+		if c then push(5, id, 1, px(c[1]), px(c[2]), px(c[3]), px(c[4]), px(el), px(eb), px(er), px(et))
+		else push(5, id, 0, 0, 0, 0, 0, px(el), px(eb), px(er), px(et)) end
 	end
 	return id
 end
@@ -1950,6 +2016,7 @@ local function emitTexture(t, clip, alpha, hover, pushed)
 	local c = t._color
 	local a = (c[4] or 1) * t._alpha * alpha
 	if a <= 0 then return end
+	if t._masks and t._masks[1] then clip = maskClipId(clip, t._masks[1]) end
 	-- the host keeps each texture's image, coordinates and colours; send them only when they change
 	local id = t._order
 	if t._sentSV ~= t._sv or t._sentA ~= a or t._sentEpoch ~= S.epoch then
@@ -2182,7 +2249,7 @@ end
 
 function S.drawList()
 	n = 0 -- the output table is reused; concat only reads entries 1..n
-	clipIds, clipN = {}, 0
+	clipIds, clipN, clipRects = {}, 0, {}
 	whiteId = sid("interface\\buttons\\white8x8")
 	local hoverFrame = S.hover
 	for _, f in ipairs(visibleFrames()) do
@@ -2624,3 +2691,114 @@ function S.isLoaded(file)
 	return S.loaded[key] == true
 end
 function SANDBOX_TEXLOADED(key) S.loaded[key] = true end
+
+------------------------------------------------------------------------------------------------
+-- Blizzard's minimap (since 2026-10-22, for GPS's minimap; made by SANDBOX_MINIMAP(), so nothing else changes):
+-- MinimapCluster (LOW strata, 256 x 256 at the top right), its MinimapContainer (215 x 226) and Minimap (198 x 198,
+-- round) as Forever's Blizzard_Minimap/Mainline/Minimap.xml lays them out, MinimapBackdrop with the ring
+-- (MinimapCompassTexture; the Camelot frame atlas, a stand-in), the zoom buttons (shown while the mouse is over the
+-- minimap, as MinimapMixin:OnEnter does), the zone text button. What the Minimap widget draws itself: its ground
+-- (a plain disc here; C_Minimap.SetDrawGroundTextures switches it), your arrow in the middle and blips at their flat
+-- places (S.minimapBlips: { X, Y, r, g, b }, world X north and Y west; the rim is C_Minimap.GetViewRadius() yards away
+-- and the picture turns with your facing while the CVar rotateMinimap is on), a click inside the circle pings
+-- (MinimapMixin:OnClick -> Minimap:PingLocation, S.pings), the wheel zooms (Minimap_ZoomIn / Minimap_ZoomOut: the
+-- zoom buttons' clicks), zoom 0-5 with the outdoor radii of the classic minimap (466 2/3 yd across at 0 to 133 1/3 at
+-- 5; S.minimapIndoor: the indoor ones).
+------------------------------------------------------------------------------------------------
+local MINIMAP_OUT = { 233.333, 200, 166.667, 133.333, 100, 66.667 }
+local MINIMAP_IN = { 150, 120, 90, 60, 40, 25 }
+function SANDBOX_MINIMAP()
+	if _G.Minimap then return _G.Minimap end
+	S.minimapZoom, S.minimapGround, S.minimapIgnoreRotate, S.pings = 0, true, false, {}
+	S.minimapBlips = S.minimapBlips or {}
+	S.cvars.rotateMinimap = S.cvars.rotateMinimap or false
+	local cluster = CreateFrame("Frame", "MinimapCluster", UIParent)
+	cluster:SetSize(256, 256); cluster:SetPoint("TOPRIGHT"); cluster:SetFrameStrata("LOW")
+	local container = CreateFrame("Frame", nil, cluster)
+	container:SetSize(215, 226); container:SetPoint("TOP", cluster, "TOP", 10, -30)
+	cluster.MinimapContainer = container
+	local mm = CreateFrame("Frame", "Minimap", container)
+	container.Minimap = mm
+	mm:SetSize(198, 198); mm:SetPoint("CENTER")
+	mm:EnableMouse(true); mm:EnableMouseWheel(true)
+	-- the widget's own drawing (regions of Minimap: its frame level, over anything of the BACKGROUND strata)
+	local mask = mm:CreateMaskTexture()
+	mask:SetTexture("Interface\\CharacterFrame\\TempPortraitAlphaMask"); mask:SetAllPoints(mm)
+	mm._blipMask = mask
+	local ground = mm:CreateTexture(nil, "BACKGROUND")
+	ground:SetAllPoints(mm); ground:SetColorTexture(0.42, 0.36, 0.24, 1); ground:AddMaskTexture(mask)
+	mm.SandboxGround = ground
+	local arrow = mm:CreateTexture(nil, "OVERLAY", nil, 7)
+	arrow:SetTexture("Interface\\Minimap\\MinimapArrow"); arrow:SetSize(32, 32); arrow:SetPoint("CENTER")
+	mm.SandboxArrow = arrow
+	mm.SandboxBlips = {}
+	function mm:GetZoom() return S.minimapZoom end
+	function mm:GetZoomLevels() return 6 end
+	function mm:SetZoom(z)
+		S.minimapZoom = math.max(0, math.min(5, math.floor(z + 0.5)))
+		SANDBOX_FIRE("MINIMAP_UPDATE_ZOOM")
+	end
+	function mm:PingLocation(x, y) S.pings[#S.pings + 1] = { x, y } end
+	function mm:SetMaskTexture(t) self._maskFile = t end
+	function mm:UpdateBlips() end
+	-- the zoom buttons (Blizzard's MinimapZoomInButtonMixin / MinimapZoomOutButtonMixin)
+	local zin = CreateFrame("Button", nil, mm); zin:SetSize(17, 17); zin:SetPoint("CENTER", mm, "CENTER", 88, -68); zin:SetNormalAtlas("ui-hud-minimap-zoom-in"); zin:Hide()
+	local zout = CreateFrame("Button", nil, mm); zout:SetSize(17, 9); zout:SetPoint("CENTER", mm, "CENTER", 72, -84); zout:SetNormalAtlas("ui-hud-minimap-zoom-out"); zout:Hide()
+	zin:SetScript("OnClick", function() mm:SetZoom(math.min(mm:GetZoom(), 4) + 1) end)
+	zout:SetScript("OnClick", function() mm:SetZoom(math.max(1, mm:GetZoom()) - 1) end)
+	mm.ZoomIn, mm.ZoomOut = zin, zout
+	function Minimap_ZoomIn() zin:Click() end
+	function Minimap_ZoomOut() zout:Click() end
+	mm:SetScript("OnMouseUp", function(self) -- MinimapMixin:OnClick
+		local x, y = S.cx, S.cy
+		local cx, cy = self:GetCenter()
+		x, y = x - cx, y - cy
+		if math.sqrt(x * x + y * y) < self:GetWidth() / 2 then self:PingLocation(x, y) end
+	end)
+	mm:SetScript("OnMouseWheel", function(_, d) if d > 0 then Minimap_ZoomIn() elseif d < 0 then Minimap_ZoomOut() end end)
+	mm:SetScript("OnEnter", function() zin:Show(); zout:Show() end)
+	mm:SetScript("OnLeave", function() if not zin:IsMouseOver() and not zout:IsMouseOver() then zin:Hide(); zout:Hide() end end)
+	-- the ring (MinimapBackdrop's MinimapCompassTexture)
+	local backdrop = CreateFrame("Frame", "MinimapBackdrop", mm)
+	backdrop:SetSize(215, 226); backdrop:SetPoint("CENTER", mm, "CENTER")
+	local ring = backdrop:CreateTexture("MinimapCompassTexture", "OVERLAY", nil, 2)
+	ring:SetAtlas("ui-hud-minimap-frame"); ring:SetSize(215, 226); ring:SetPoint("CENTER", mm, "CENTER")
+	local zone = CreateFrame("Button", nil, cluster); zone:SetSize(140, 16); zone:SetPoint("TOP", cluster, "TOP", 10, -8)
+	local zt = zone:CreateFontString("MinimapZoneText", "OVERLAY", "GameFontNormal"); zt:SetAllPoints(zone)
+	cluster.ZoneTextButton = zone
+	-- each frame: the arrow, the blips and the zone text, as the game's widget draws them
+	mm:SetScript("OnUpdate", function()
+		local p = S.player
+		ground:SetShown(S.minimapGround)
+		zt:SetText(p.subzone ~= "" and p.subzone or p.zone)
+		local rotate = S.cvars.rotateMinimap and not S.minimapIgnoreRotate
+		local f = p.facing or 0
+		arrow:SetRotation(rotate and 0 or f)
+		local R = C_Minimap.GetViewRadius()
+		local w = mm:GetWidth()
+		local k = (w / 2) / R
+		for i, b in ipairs(S.minimapBlips) do
+			local t = mm.SandboxBlips[i]
+			if not t then
+				t = mm:CreateTexture(nil, "OVERLAY", nil, 5); t:SetTexture("Interface\\Buttons\\WHITE8X8"); t:SetSize(6, 6)
+				mm.SandboxBlips[i] = t
+			end
+			local e, n = -(b[2] - (p.Y or 0)), b[1] - (p.X or 0)
+			local sx, sy = e, n
+			if rotate then sx, sy = e * math.cos(f) + n * math.sin(f), -e * math.sin(f) + n * math.cos(f) end
+			sx, sy = sx * k, sy * k
+			t:ClearAllPoints(); t:SetPoint("CENTER", mm, "CENTER", sx, sy)
+			t:SetVertexColor(b[3] or 1, b[4] or 1, b[5] or 0)
+			t:SetShown(p.map ~= nil and sx * sx + sy * sy <= (w / 2) ^ 2)
+			t._blip = { sx, sy }
+		end
+		for i = #S.minimapBlips + 1, #mm.SandboxBlips do mm.SandboxBlips[i]:Hide() end
+	end)
+	C_Minimap = C_Minimap or {}
+	function C_Minimap.GetViewRadius() return (S.minimapIndoor and MINIMAP_IN or MINIMAP_OUT)[S.minimapZoom + 1] end
+	function C_Minimap.SetDrawGroundTextures(draw) S.minimapGround = not not draw; S.minimapGroundCalls = (S.minimapGroundCalls or 0) + 1; touch() end
+	function C_Minimap.GetDrawGroundTextures() return S.minimapGround end
+	function C_Minimap.IsRotateMinimapIgnored() return S.minimapIgnoreRotate end
+	function C_Minimap.SetIgnoreRotateMinimap(v) S.minimapIgnoreRotate = not not v end
+	return mm
+end
