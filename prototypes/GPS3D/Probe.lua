@@ -217,6 +217,26 @@ local function PhaseEnd(ph)
 end
 
 ------------------------------------------------------------------------------------------------
+-- Where it measures: a fixed view, so you can run it from anywhere without moving (Morten plays Horde)
+------------------------------------------------------------------------------------------------
+-- name -> map, tile x, tile y (the middle of the view), what to call it; straight down from 330 yd, north up
+P.PLACES = {
+	orgrimmar = { 1, 40.21, 28.94, "Orgrimmar, Valley of Strength" },
+	stormwind = { 0, 30.80, 48.56, "Stormwind, Trade District" },
+}
+P.DEFAULT_PLACE = "orgrimmar"
+
+local function GoTo(place)
+	local cam, T = ns.cam, ns.TILE
+	cam.map, cam.x, cam.y = place[1], place[2] * T, -place[3] * T
+	cam.dist, cam.yaw = 330, 0
+	ns.SetTopDown(true, true)
+	cam.th = ns.GroundHeight(cam.x, cam.y, cam.map) or cam.th
+	if ns.SnapLift then ns.SnapLift() end
+	ns.Redraw()
+end
+
+------------------------------------------------------------------------------------------------
 -- Saving and putting back
 ------------------------------------------------------------------------------------------------
 local function Save()
@@ -226,6 +246,7 @@ local function Save()
 	P.saved = {
 		grid = g, buildings = b, detail = d, dbGrid = db.grid, dbBuildings = db.buildings, dbDetail = db.detail,
 		x = cam.x, y = cam.y, th = cam.th, yaw = cam.yaw, map = cam.map, mode = ns.CamMode(),
+		dist = cam.dist, pitch = cam.pitch, tiltBefore = cam.tiltBefore, topDown = ns.IsTopDown(), dbTopDown = (GPS3D_DB or {}).topDown,
 		-- (the ground's level-of-detail controller: it has a dead band, so after the budgets and the turns it
 		-- would settle on a slightly different tolerance; put back with the blocks' levels, the view is drawn
 		-- as before)
@@ -252,8 +273,12 @@ local function RestoreCamera()
 	if not s or P.cameraBack then return end
 	P.cameraBack = true
 	local cam = ns.cam
-	if cam.map == s.map then cam.x, cam.y, cam.th = s.x, s.y, s.th end
-	cam.yaw = s.yaw
+	cam.map, cam.x, cam.y, cam.th = s.map, s.x, s.y, s.th -- (the probe may have moved the view to a city)
+	cam.dist, cam.yaw = s.dist, s.yaw
+	if ns.IsTopDown() ~= s.topDown then ns.SetTopDown(s.topDown, true) end
+	cam.pitch, cam.tiltBefore = s.pitch, s.tiltBefore
+	if GPS3D_DB then GPS3D_DB.topDown = s.dbTopDown end
+	if ns.SnapLift then ns.SnapLift() end
 	if s.mode ~= ns.CamMode() then ns.SetCamMode(s.mode) end
 	if ns.Lod.map == s.lodMap then ns.Lod.kappa, ns.Lod.target = s.kappa, s.target end
 	ns.BlockLevels(s.blocks)
@@ -573,6 +598,13 @@ end
 local function Plan()
 	wipe(steps); wipe(rows); wipe(cleanups)
 	-- 1
+	if P.place then
+		Step(1, 3, function()
+			ns.SetCamMode("free")
+			GoTo(P.place)
+			Say("1/5 the view moved to %s (straight down, 330 yd), so you do not have to; it goes back when the probe ends", P.place[4])
+		end, function() ns.Redraw() end) -- (a few seconds for the buildings there to load and be built)
+	end
 	Step(1, 0, function()
 		local cam = ns.cam
 		local W, H = ns.canvas:GetSize()
@@ -710,13 +742,18 @@ function ns.Probe(arg)
 		return
 	end
 	if P.running then Say("already running (/gps3d probe stop ends it)") return end
+	-- where: a city by name (default Orgrimmar), or "here" for the view as it is
+	if arg == "" then arg = P.DEFAULT_PLACE end
+	if arg == "here" then P.place = nil
+	elseif P.PLACES[arg] then P.place = P.PLACES[arg]
+	else Say("unknown place '%s': /gps3d probe [orgrimmar|stormwind|here|stop]", arg) return end
 	if InCombatLockdown and InCombatLockdown() then
 		Say("not in combat: it changes the 3D view's settings and frames for about a minute; run it again after the fight")
 		return
 	end
 	GPS3D_API.Open()
 	if not ns.frame:IsShown() then Say("the 3D window did not open") return end
-	if ns.cam.dist >= ns.MAX_DIST then Say("zoom in below %d yd first: it measures the ground, not the planet", ns.MAX_DIST) return end
+	if not P.place and ns.cam.dist >= ns.MAX_DIST then Say("zoom in below %d yd first: it measures the ground, not the planet", ns.MAX_DIST) return end
 	P.lines = {}
 	Save()
 	Plan()

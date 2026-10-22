@@ -232,7 +232,11 @@ for l in rows:
     if m: nums.append([float(v) for v in m.groups()])
 check('part 1: six settings, each with textures, frame times, Lua ms and calls', len(nums) == 6 and all(r[2] > 0 and r[3] > 0 and r[8] > 0 for r in nums), '\n   ' + '\n   '.join(l.split('|r ')[-1] for l in rows))
 check('part 1: turning sends calls, redrawing an unmoved view almost none', all(r[9] > 1000 and r[6] <= 50 for r in nums), str([(int(r[0]), int(r[1]), int(r[6]), int(r[9])) for r in nums]))
-check('part 1: more ground or building budget, more textures', nums[0][2] < nums[1][2] < nums[2][2] and nums[1][2] < nums[3][2] < nums[4][2] <= nums[5][2] if len(nums) == 6 else False, str([int(r[2]) for r in nums]))
+# (more budget never fewer textures; at Orgrimmar from 330 yd the ground fits in 3,200 triangles, so 6,400 adds none)
+check('part 1: more ground or building budget, more textures (never fewer; at least 4 different counts)', nums[0][2] < nums[1][2] <= nums[2][2] and nums[1][2] < nums[3][2] < nums[4][2] <= nums[5][2] and len(set(int(r[2]) for r in nums)) >= 4 if len(nums) == 6 else False, str([int(r[2]) for r in nums]))
+# (since 2026-10-22 it moves the view itself: Morten plays Horde and wants to run it without moving; default Orgrimmar)
+view_line = next((l for l in CHAT if '1/5 view:' in l), '')
+check('with no place given it measures at Orgrimmar (the view moved there, map 1, straight down at 330 yd), not where you are', any('moved to Orgrimmar, Valley of Strength' in l for l in CHAT) and 'map 1, tile 40.21, 28.94, 330 yd, tilt 89.9' in view_line, view_line.split('|r ')[-1][:140])
 check('part 1: an estimate line per texture and per call', any('1/5 estimate from 6 settings' in l for l in CHAT))
 check('missing APIs say "missing" and the other parts go on', '3/5 RotateTextures: missing' in text and '4/5 SetPointsOffset: missing' in text and '5/5 OffScreenFrame: made; methods there: none' in text and '2/5 fold: shown' in text)
 check('settings, camera mode and view put back exactly', state() == before_state, f'{state()} vs {before_state}')
@@ -270,7 +274,7 @@ settle()
 G.PROBE_STANDINS('work'); P.off = None
 P.SETTINGS = L.eval('{ { 3200, 4000 } }')  # (part 1 once, to keep the run short)
 CHAT.clear(); before_state = state()
-G.SANDBOX_SLASH('/gps3d probe'); tick(1)
+G.SANDBOX_SLASH('/gps3d probe stormwind'); tick(1)
 # watch part 4: anchors to the depth frames, the glide's shift on every frame, the cross on the shifted ground
 seen = {'anchored': 0, 'glide': 0, 'ok': 0, 'worst': 0.0, 'cross': 0.0}
 track = None
@@ -325,11 +329,16 @@ bf = ns2.bucketFrames
 check('afterwards: every depth frame\'s offset cleared, every texture anchored to the canvas again, nothing left shown',
       all(bf[k]._pofs is None for k in range(1, 9)) and anchors_on_canvas() == 0 and len(P.anchored) == 0 and made_hidden(), f'{anchors_on_canvas()} anchored elsewhere')
 check('settings and camera put back (run 2)', state() == before_state, f'{state()} vs {before_state}')
+view_line = next((l for l in CHAT if '1/5 view:' in l), '')
+check('/gps3d probe stormwind measures at the Trade District (map 0, tile 30.80, 48.56)', 'map 0, tile 30.80, 48.56, 330 yd' in view_line and any('moved to Stormwind, Trade District' in l for l in CHAT), view_line.split('|r ')[-1][:140])
 
 # ---- run 3: every new API raises ---------------------------------------------------------------------------
 G.PROBE_STANDINS('error'); P.off = None
 CHAT.clear(); before_state = state()
-G.SANDBOX_SLASH('/gps3d probe'); run(); text = '\n'.join(CHAT)
+here_view = (round(cam.x / ns2.TILE, 2), round(-cam.y / ns2.TILE, 2))
+G.SANDBOX_SLASH('/gps3d probe here'); run(); text = '\n'.join(CHAT)
+view_line = next((l for l in CHAT if '1/5 view:' in l), '')
+check('/gps3d probe here measures the view as it is (no move)', not any('moved to' in l for l in CHAT) and f'tile {here_view[0]:.2f}, {here_view[1]:.2f}' in view_line, view_line.split('|r ')[-1][:140])
 check('APIs that raise: each part says "error" and the probe still runs to the end',
       'RotateTextures: error' in text and '4/5 SetPointsOffset: error' in text and '5/5 OffScreenFrame: missing (CreateFrame' in text and 'done in' in text,
       ' | '.join(l.split('|r ')[-1][:90] for l in CHAT if re.search(r'[345]/5', l)))

@@ -3009,8 +3009,9 @@ GPS3D_API.settings = {
 -- /gps3d clear            remove the extra models
 -- /gps3d fov [rad]        override the models' field of view (no value: automatic)
 -- /gps3d cam              print the scene camera's vectors
--- /gps3d probe [stop]     in-game measurements and test pictures for the performance work (Probe.lua,
---                         TESTING.md section 15): about a minute, not in combat
+-- /gps3d probe [orgrimmar|stormwind|here|stop]   in-game measurements and test pictures for the performance
+--                         work (Probe.lua, TESTING.md section 15): about a minute, not in combat; it moves the
+--                         view to Orgrimmar (default) or Stormwind by itself, "here" keeps the view as it is
 SLASH_GPS3D1 = "/gps3d"
 SlashCmdList.GPS3D = function(msg)
 	GPS.Log("SLASH", "/gps3d %s", msg or "")

@@ -16,6 +16,23 @@ What this test decides (send these even if everything else works):
 
 Before the game, the GPS Sandbox page (`tools/sandbox`) runs the same files in a browser with a simulated player: good for trying the controls and the look, not for the game-only questions (image loading by file ID, the real character model, real frame times).
 
+## Next in-game session (saved 2026-10-22, to do when Morten has time)
+
+Everything below is installed in `_forever_` and `_classic_beta_` (GitHub `globe` at fedf850). Restart the game once (new addon folders), log in on any character, out of combat. You do not need to travel; nothing here needs moving except where it says so.
+
+1. **The probe (most important).** Open the 3D view, type `/gps3d probe`, hands off for about a minute (it moves the view to Orgrimmar by itself and back at the end). Take one screenshot when it says `TAKE A SCREENSHOT NOW`; when the ground slides, note whether the red cross and your arrow stay on it. Send the `GPS3D probe` chat lines (or `/reload` and `WTF\...\SavedVariables\GPS3D.lua`), the screenshot and that one sentence. Details: section 15. Its answers decide the next performance steps (one texture per pair of triangles; moving only what moved).
+2. **AddOns list:** GPS, GPS3D and nine "GPS 3D data" entries are listed. The old `GPS3D\Data\Detail_*.lua` and `Models_*.lua` files are no longer loaded and can be deleted.
+3. **The fixes of 2026-10-21** (each a quick look; screenshot anything off):
+   - 3D arrow the same size as the 2D arrow at every zoom; the 2D/3D text centred in its ring.
+   - Zooming in and out with the wheel (Durotar, Hyjal, Orgrimmar from the 3D view, Free camera): the ground glides instead of jumping, no cracks between tiles; Hyjal from about 5,000 yd.
+   - Orgrimmar or a city 60-300 yd, tilted: every building nearby stands up (none flat among raised ones); moving back a little does not switch which.
+   - Zoom and pan over Orgrimmar: the camera climbs smoothly over roofs and walls instead of jumping.
+   - The planet: clouds above the land, out to the rim; spin it; `/gps3d test` planet frame time; seams inside clouds?
+   - The sea over north Kalimdor (6,000-12,000 yd): one colour, no triangles, no L line NE of Azshara, no edge into the planet's sea.
+   - Track a quest with an area: the 3D view shows it on the ground like 2D; `/gps3d test` `quest areas:` line.
+   - Blizzard's map: the globe left of the maximize arrow; click it, then M opens GPS; GPS's globe goes back; the full-screen arrow in each mode; `/gps test` `map key:` line; no "Interface action failed".
+4. **The performance round (2026-10-22):** with `/gps debug on`, pan and turn in the 3D view over a city and far out (dragging the map is enough, no walking): ground or buildings must never appear late at the window's edges (section 16); a short stutter the first time a new area's buildings load?; switch *Props and trees* on in the settings with the camera still: they should appear without moving. Send the PERF and MEMORY lines after `/reload`.
+
 ## 0. Before you start
 
 1. Close the game. Copy `Interface/AddOns/GnomishPositioningSystem` and every `prototypes/GPS3D*` folder (`GPS3D` and, since 2026-10-22, its nine data folders `GPS3D_EK1` to `GPS3D_EK4`, `GPS3D_Kalimdor1` to `GPS3D_Kalimdor3`, `GPS3D_Instances` and `GPS3D_Models`) into `C:\Program Files (x86)\World of Warcraft\_classic_beta_\Interface\AddOns\`. You should end up with `...\AddOns\GnomishPositioningSystem\Core.lua`, `...\AddOns\GPS3D\GPS3D.lua` and `...\AddOns\GPS3D_EK1\GPS3D_EK1.toc` (and the other eight next to it). An older copy's `GPS3D\Data\Detail_*.lua` and `Models_*.lua` can be deleted: nothing loads them any more.
@@ -223,8 +240,8 @@ The easiest hand-over is to copy these into a `testing/` folder in this reposito
 
 One command runs the in-game measurements the performance work needs (the review of 2026-10-22, section 2), about a minute, and puts everything back when it ends. Out of combat (it refuses in combat, and stops if a fight starts).
 
-1. Stand in Stormwind's Trade District, out of combat, nothing else moving you. Optional: `/gps debug on` first, so the lines also land in the debug log. Open the 3D view (`/gps3d`) and leave it as it opens: following you, straight down, 330 yd. Let it sit a few seconds.
-2. Type `/gps3d probe`. **Do not touch the mouse or the keys until it says `done`** (`/gps3d probe stop` ends it at once). For about 45 s it changes the ground and building detail six times (ground 800, 3,200, 6,400 with no buildings; buildings 2,000, 4,000, 8,000 with ground 3,200), each held still, redrawn and slowly turning by itself, and prints a line per setting: textures, the frame time, GPS3D's own Lua time, the calls a frame, and at the end an estimate of what one texture and one call cost the game.
+1. Anywhere in the overworld, out of combat, standing still (no need to travel: since 2026-10-22 the probe moves the 3D view to a city by itself and back when it ends). Optional: `/gps debug on` first, so the lines also land in the debug log. Open the 3D view (`/gps3d`).
+2. Type `/gps3d probe` (it measures over Orgrimmar's Valley of Strength, straight down from 330 yd; `/gps3d probe stormwind` measures over Stormwind's Trade District, `/gps3d probe here` the view as it is). **Do not touch the mouse or the keys until it says `done`** (`/gps3d probe stop` ends it at once). For about 45 s it changes the ground and building detail six times (ground 800, 3,200, 6,400 with no buildings; buildings 2,000, 4,000, 8,000 with ground 3,200), each held still, redrawn and slowly turning by itself, and prints a line per setting: textures, the frame time, GPS3D's own Lua time, the calls a frame, and at the end an estimate of what one texture and one call cost the game.
 3. **When it says `TAKE A SCREENSHOT NOW`, press Print Screen** (the picture stays 10 s). Left: two checkerboard squares, each with one corner lifted; in each, one of the two diagonals (red: corners 1-4, blue: corners 2-3) stays straight and the other kinks: the straight one is the diagonal the game folds a bent texture along. Right: a bent triangle, and the same in a frame turned by `RotateTextures(0.5)` with a white ghost where it was: if the triangle still covers the ghost, only the image turned; if it sits turned off the ghost, the shape turned.
 4. Then the ground slides about 35 px on its own for 3 s without being redrawn (each depth frame moved by `SetPointsOffset`), with a red cross on the ground in the middle. **Watch the cross and your arrow**: do they stay on the same spot of the ground while it slides? At the end the ground is drawn again for real: does anything jump? (A strip of background at one edge while it slides is expected.)
 5. It says `done` and puts the settings, the camera and everything it made back. Send: the `GPS3D probe` chat lines (or `_classic_beta_\Logs\WoWChatLog.txt`, or `WTF\...\SavedVariables\GPS3D.lua` after a `/reload`: `GPS3D_DB.probe` keeps the last run's lines), the screenshot, and one sentence on step 4. Lines that say `missing` or `error` are answers too (that API is not there, or refused). If you can, run it a second time in open country (Westfall) and send both.
@@ -234,7 +251,7 @@ One command runs the in-game measurements the performance work needs (the review
 Since 2026-10-22 the 3D view keeps its choice of ground tiles and building blocks between frames while the view
 moves little (the sandbox checks that nothing on the canvas is ever missing). In the game:
 
-1. `/gps debug on`, open the 3D view over Stormwind (straight down, following you), walk around for half a minute,
+1. `/gps debug on`, open the 3D view over Stormwind or Orgrimmar (straight down; double-click or drag the map there, no travelling needed), drag the map around for half a minute,
    turn the view slowly with the right mouse button, then zoom out to about 5,000 yd over open country and pan.
 2. Look at the window's edges while walking and turning: ground or buildings must never appear late there (a
    blank strip or a building popping up at the edge). Buildings far from you at the edge of the building budget
