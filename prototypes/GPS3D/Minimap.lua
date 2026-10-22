@@ -24,10 +24,12 @@
 -- near the rim; without the stretch 10 and 22 px with this lens, 14 and 35 px with the 3D window's 50-degree one).
 --
 -- One renderer: GPS3D has one camera, one canvas and one texture pool. The minimap borrows them while the 3D
--- window is closed (the camera, the budgets and the canvas's place, levels and strata are kept and put back);
+-- window is closed (the camera and the canvas's place, levels and strata are kept and put back);
 -- while the 3D window is open Blizzard's minimap is back (GPS3D.lua's Open calls MinimapYield first). The
--- minimap draws only the ground and the building blocks (GPS3D's RenderWorld) at its own budgets (MM.GRID,
--- MM.DETAIL), and only when you moved, turned, the zoom or the size changed, or blocks wait to be made.
+-- minimap draws only the ground and the building blocks (GPS3D's RenderWorld) at its own budgets (MM.grid,
+-- MM.detail: the settings "Minimap ground detail" and "Minimap building detail", GPS3D_DB.minimapGrid and
+-- minimapBuildings, /gps minimap ground|buildings <n>; separate from the 3D window's "Ground detail" and
+-- "Building detail", since the minimap is a small view on screen all the time), and only when you moved, turned, the zoom or the size changed, or blocks wait to be made.
 -- Your arrow, the quest markers and areas, other addons' markers and the game's models are the minimap's own
 -- (Blizzard's, drawn on top), so GPS's are hidden there.
 --
@@ -53,13 +55,15 @@ local MM = {
 	tilt = 35,         -- degrees from straight down (the setting "Minimap tilt")
 	TILT_DEFAULT = 35, TILT_MAX = 45,
 	FOV = 12,          -- the lens, degrees top to bottom: narrow, so the blips line up (see above)
-	GRID = 1200,       -- ground triangles a frame (the 3D window: 3,200 by default)
-	DETAIL = 1500,     -- building triangles a frame (the 3D window: 4,000)
+	grid = 1200,       -- ground triangles a frame (the setting "Minimap ground detail"; the 3D window: 3,200 by default)
+	detail = 1500,     -- building triangles a frame (the setting "Minimap building detail"; the 3D window: 4,000)
+	GRID_DEFAULT = 1200, GRID_MIN = 400, GRID_MAX = 3200, GRID_STEP = 200,
+	DETAIL_DEFAULT = 1500, DETAIL_MIN = 500, DETAIL_MAX = 4000, DETAIL_STEP = 250,
 	LEVEL = 100,       -- the host's frame level in the BACKGROUND strata (HybridMinimap's)
 	INSET = 3,         -- the round mask's inset from the minimap's edge (HybridMinimap's)
 	MASK = "Interface\\CharacterFrame\\TempPortraitAlphaMask",
 	RADIUS = 200,      -- yards to the rim when C_Minimap.GetViewRadius is missing
-	saved = nil,       -- what the 3D window had (camera, budgets, the canvas's place)
+	saved = nil,       -- what the 3D window had (camera, the canvas's place)
 	last = {},         -- the camera last drawn
 	draws = 0, frames = 0, ms = 0, -- redraws, frames looked at and the last redraw's Lua ms
 	dirty = true,
@@ -138,7 +142,6 @@ local function Take()
 	if ns.GlobeLeave then ns.GlobeLeave() end -- (the 3D window was left on the planet: its frames hidden, the ground's shown)
 	local s = { cam = {}, points = {}, frames = {}, hidden = {} }
 	for _, k in ipairs(CAM_KEYS) do s.cam[k] = cam[k] end
-	s.grid, s.detail = ns.Budgets()
 	s.parent = canvas:GetParent()
 	for i = 1, canvas:GetNumPoints() do s.points[i] = { canvas:GetPoint(i) } end
 	s.strata, s.level = canvas:GetFrameStrata(), canvas:GetFrameLevel()
@@ -207,7 +210,6 @@ local function Give(why)
 	canvas:EnableMouse(s.mouse)
 	canvas:EnableMouseWheel(s.wheel)
 	for _, k in ipairs(CAM_KEYS) do cam[k] = s.cam[k] end
-	ns.SetBudgets(s.grid, s.detail)
 	if ns.choice then ns.choice.ok = false end
 	if ns.Lod then ns.Lod.map = -1 end
 	if ns.SnapLift then ns.SnapLift() end
@@ -254,10 +256,14 @@ end
 
 local function Draw()
 	local t0 = debugprofilestop()
-	ns.SetBudgets(MM.GRID, MM.DETAIL)
+	-- the minimap's own budgets for this draw only: the 3D window's stay set the rest of the time (its Open also
+	-- reads its saved Ground and Building detail again)
+	local grid, detail = ns.Budgets()
+	ns.SetBudgets(MM.grid, MM.detail)
 	if ns.SnapLift then ns.SnapLift() end -- (far above you: no lift; nothing left over from the 3D window)
 	if ns.WantData then ns.WantData() end -- the buildings near you, loaded on demand (OnDemand.lua)
 	ns.RenderWorld(ns.Focal(), ns.CameraBasis())
+	ns.SetBudgets(grid, detail)
 	MM.dirty = false
 	MM.draws = MM.draws + 1
 	MM.ms = debugprofilestop() - t0
@@ -343,19 +349,55 @@ function MM.SetTilt(v)
 	MM.tilt, MM.dirty = v, true
 end
 
+local function Clamp(v, lo, hi, step, default)
+	v = tonumber(v)
+	if not v then return default end
+	return max(lo, min(hi, floor(v / step + 0.5) * step))
+end
+
+-- The minimap's own detail (separate from the 3D window's, which keeps its own budgets)
+function MM.SetGrid(v)
+	v = Clamp(v, MM.GRID_MIN, MM.GRID_MAX, MM.GRID_STEP, MM.GRID_DEFAULT)
+	DB().minimapGrid = v
+	MM.grid, MM.dirty = v, true
+	Log("ground detail: %d", v)
+	return v
+end
+
+function MM.SetDetail(v)
+	v = Clamp(v, MM.DETAIL_MIN, MM.DETAIL_MAX, MM.DETAIL_STEP, MM.DETAIL_DEFAULT)
+	DB().minimapBuildings = v
+	MM.detail, MM.dirty = v, true
+	Log("building detail: %d", v)
+	return v
+end
+
 function MM.State()
 	if not MM.on then return "off" end
 	if MM.active then
-		return ("on: GPS's view in the minimap, tilted %d, %s, %.0f yd to the rim, %d redraws (last %.1f ms)"):format(MM.tilt,
-			Rotating() and "turning with you" or "north up", C_Minimap and C_Minimap.GetViewRadius and C_Minimap.GetViewRadius() or MM.RADIUS, MM.draws, MM.ms)
+		return ("on: GPS's view in the minimap, tilted %d, %s, %.0f yd to the rim, detail %d ground / %d buildings, %d redraws (last %.1f ms)"):format(MM.tilt,
+			Rotating() and "turning with you" or "north up", C_Minimap and C_Minimap.GetViewRadius and C_Minimap.GetViewRadius() or MM.RADIUS,
+			MM.grid, MM.detail, MM.draws, MM.ms)
 	end
 	return "on, Blizzard's minimap for now: " .. tostring(MM.why or "starting")
 end
 
--- /gps minimap [on|off] (GPS's slash command hands it over)
+-- /gps minimap [on|off | ground <n> | buildings <n>] (GPS's slash command hands it over)
 GPS3D_API.Minimap = function(arg)
 	arg = strtrim(arg or ""):lower()
-	if arg == "on" or arg == "off" then MM.Set(arg == "on") end
+	local what, n = arg:match("^(%a+)%s*(.-)$")
+	if arg == "on" or arg == "off" then MM.Set(arg == "on")
+	elseif what == "ground" or what == "buildings" then
+		if tonumber(n) then
+			local v = what == "ground" and MM.SetGrid(n) or MM.SetDetail(n)
+			print(("|cff55ff55GPS3D|r minimap %s detail: %d triangles"):format(what == "ground" and "ground" or "building", v))
+		else
+			print(("|cff55ff55GPS3D|r minimap: /gps minimap %s <n> (%d to %d; now %d)"):format(what,
+				what == "ground" and MM.GRID_MIN or MM.DETAIL_MIN, what == "ground" and MM.GRID_MAX or MM.DETAIL_MAX,
+				what == "ground" and MM.grid or MM.detail))
+		end
+		return
+	end
 	print("|cff55ff55GPS3D|r minimap: " .. MM.State())
 end
 GPS3D_API.MinimapState = MM.State
@@ -367,6 +409,8 @@ do
 	f:SetScript("OnEvent", function()
 		local db = DB()
 		MM.tilt = max(0, min(MM.TILT_MAX, tonumber(db.minimapTilt) or MM.TILT_DEFAULT))
+		MM.grid = Clamp(db.minimapGrid, MM.GRID_MIN, MM.GRID_MAX, MM.GRID_STEP, MM.GRID_DEFAULT)
+		MM.detail = Clamp(db.minimapBuildings, MM.DETAIL_MIN, MM.DETAIL_MAX, MM.DETAIL_STEP, MM.DETAIL_DEFAULT)
 		if db.minimap then MM.Set(true, true) end
 	end)
 end
@@ -389,5 +433,21 @@ if GPS3D_API.settings then
 		format = function(v) return ("%d\194\176"):format(v) end,
 		get = function() return GPS3D_DB and GPS3D_DB.minimapTilt end,
 		set = function(v) MM.SetTilt(v) end,
+	}
+	list[#list + 1] = {
+		kind = "slider", key = "GPS3D_MinimapGrid", name = "Minimap ground detail",
+		tooltip = "Ground triangles the minimap draws per frame; separate from the 3D view's Ground detail. Lower is faster (/gps minimap ground).",
+		default = MM.GRID_DEFAULT, min = MM.GRID_MIN, max = MM.GRID_MAX, step = MM.GRID_STEP,
+		format = function(v) return ("%d"):format(v) end,
+		get = function() return GPS3D_DB and GPS3D_DB.minimapGrid end,
+		set = function(v) MM.SetGrid(v) end,
+	}
+	list[#list + 1] = {
+		kind = "slider", key = "GPS3D_MinimapBuildings", name = "Minimap building detail",
+		tooltip = "Building triangles the minimap draws per frame; separate from the 3D view's Building detail. Lower is faster (/gps minimap buildings).",
+		default = MM.DETAIL_DEFAULT, min = MM.DETAIL_MIN, max = MM.DETAIL_MAX, step = MM.DETAIL_STEP,
+		format = function(v) return ("%d"):format(v) end,
+		get = function() return GPS3D_DB and GPS3D_DB.minimapBuildings end,
+		set = function(v) MM.SetDetail(v) end,
 	}
 end

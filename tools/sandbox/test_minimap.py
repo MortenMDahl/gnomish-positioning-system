@@ -2,6 +2,8 @@
 # engine's stand-in of Blizzard's minimap (SANDBOX_MINIMAP: MinimapCluster, Minimap 198 px round, its zoom buttons,
 # ring, blips drawn flat at C_Minimap.GetViewRadius, rotateMinimap, PingLocation, C_Minimap.SetDrawGroundTextures):
 # - off by default; the setting on GPS's settings page and /gps minimap on|off, applied at once, kept over a reload;
+# - its own detail ("Minimap ground detail", "Minimap building detail", /gps minimap ground|buildings <n>), applied at
+#   once, saved, and independent of the 3D window's Ground and Building detail both ways;
 # - on: GPS3D's canvas in a host under Blizzard's Minimap (BACKGROUND strata, as Blizzard's HybridMinimap), the
 #   minimap's ground art off, the ground and buildings drawn, every texture masked round;
 # - follows you, north up or turned with you (rotateMinimap), tilted as set; Blizzard's blips (drawn flat by the
@@ -30,6 +32,8 @@ MUTANTS = [
     ('the zoom not followed', 'GPS3D', 'Minimap.lua', '\tlocal R = C_Minimap and C_Minimap.GetViewRadius and C_Minimap.GetViewRadius() or MM.RADIUS\n', '\tlocal R = MM.RADIUS\n', 'zoom'),
     ('north up while the minimap turns', 'GPS3D', 'Minimap.lua', '\tcam.yaw = Rotating() and (-deg(p.facing)) % 360 or 0\n', '\tcam.yaw = 0\n', 'turns with you'),
     ('the canvas takes the mouse', 'GPS3D', 'Minimap.lua', '\tcanvas:EnableMouse(false)\n', '', 'mouse'),
+    ('the minimap draws at fixed budgets, not its settings', 'GPS3D', 'Minimap.lua', '\tns.SetBudgets(MM.grid, MM.detail)\n', '\tns.SetBudgets(1200, 1500)\n', 'Minimap ground detail'),
+    ("the 3D window's budgets not put back after a minimap draw", 'GPS3D', 'Minimap.lua', '\tns.SetBudgets(grid, detail)\n', '', 'independent'),
     ('no /gps minimap', 'GnomishPositioningSystem', 'Core.lua', '\telseif cmd == "minimap" or cmd:match("^minimap%s") then\n', '\telseif cmd == "minimap-off" then\n', '/gps minimap'),
 ]
 mutant = MUTANTS[int(sys.argv[sys.argv.index('--mutant') + 1])] if '--mutant' in sys.argv else None
@@ -240,6 +244,12 @@ check('default off: nothing of the minimap changed, GPS3D\'s canvas in its windo
       and not MM.driver.IsShown(MM.driver), f'{ctl}')
 check('settings page: "Use GPS as minimap" (off) and "Minimap tilt" (35 degrees) under a "Minimap" header after the 3D view\'s',
       ctl and ctl['name'] == 'Use GPS as minimap' and tilt and tilt['default'] == 35 and tilt['label'] == '35°', f'{tilt}')
+mg, mb = g.control('GPS3D_MinimapGrid'), g.control('GPS3D_MinimapBuildings')
+wg, wb = g.control('GPS3D_GridBudget'), g.control('GPS3D_BuildingBudget')
+check('settings page: "Minimap ground detail" (1,200, 400 to 3,200) and "Minimap building detail" (1,500, 500 to 4,000), apart from the 3D view\'s Ground and Building detail',
+      mg and mb and wg and wb and mg['name'] == 'Minimap ground detail' and mg['default'] == 1200 and mg['label'] == '1200' and mg['min'] == 400 and mg['max'] == 3200
+      and mb['name'] == 'Minimap building detail' and mb['default'] == 1500 and mb['label'] == '1500' and mb['min'] == 500 and mb['max'] == 4000
+      and wg['default'] == 3200 and wb['default'] == 4000, f'{mg} {mb}')
 
 # ---- on, through the settings page
 g.setting('GPS3D_Minimap', True); g.tick(2)
@@ -421,7 +431,56 @@ g2.tick(3)
 check('kept over a reload: on at login', g2.mm.on and g2.mm.active and g2.in_minimap() and not g2.ground())
 g2.setting('GPS3D_MinimapTilt', 20); g2.tick(2)
 check('Minimap tilt: the setting tilts the view at once and is saved', abs(g2.ns3.cam.pitch - 70) < 1e-9 and g2.G.GPS3D_DB.minimapTilt == 20, f'{g2.ns3.cam.pitch}')
+
+# ---- the minimap's own detail settings (separate from the 3D window's)
+g2.L.execute('function REC_BUDGETS(ns) local orig = ns.RenderWorld; ns.RenderWorld = function(...) local a, b = ns.Budgets(); BUDGET_SEEN = a .. " " .. b; return orig(...) end end')
+g2.G.REC_BUDGETS(g2.ns3)
+M2, N2 = g2.mm, g2.ns3
+def nudge(gg, k):  # (a step, so the minimap redraws; returns whether it did)
+    d = gg.mm.draws
+    gg.at(-8830 + k * 5, 640, 0, 2.3, 'Stormwind City', 'Trade District'); gg.tick(2)
+    return gg.mm.draws > d
+nudge(g2, 1)
+tris0, seen0 = int(N2.stats.tris), str(g2.G.BUDGET_SEEN)
+d0 = M2.draws
+g2.setting('GPS3D_MinimapGrid', 600); g2.tick(2)
+tris1, seen1 = int(N2.stats.tris), str(g2.G.BUDGET_SEEN)
+check('Minimap ground detail: the setting applies at once (redrawn at the new budget, fewer ground triangles), is saved, and the 3D window\'s budget is back after the draw',
+      M2.grid == 600 and g2.G.GPS3D_DB.minimapGrid == 600 and M2.draws > d0 and seen0 == '1200 1500' and seen1.startswith('600 ') and tris1 < tris0
+      and g2.L.eval('function(ns) local a, b = ns.Budgets(); return a .. " " .. b end')(N2) == '3200 4000',
+      f'budgets in the draw {seen0} -> {seen1}, ground triangles {tris0} -> {tris1}')
+d0 = M2.draws
+g2.setting('GPS3D_MinimapBuildings', 750); g2.tick(2)
+dt, seen2 = int(N2.stats.detailTris), str(g2.G.BUDGET_SEEN)
+check('Minimap building detail: the setting applies at once (redrawn, building triangles within the new budget) and is saved',
+      M2.detail == 750 and g2.G.GPS3D_DB.minimapBuildings == 750 and M2.draws > d0 and seen2 == '600 750' and 0 < dt <= 750,
+      f'budgets in the draw {seen2}, building triangles {dt}')
+# the 3D window at its defaults (never set) opens with them after the minimap drew at its own
+budgets = g2.L.eval('function(ns) local a, b = ns.Budgets(); return a .. " " .. b end')
+r2 = nudge(g2, 4)
+g2.slash('/gps 3d'); g2.tick(3)
+win0 = budgets(N2)
+g2.close_all(); g2.tick(3)
+# the 3D window's settings changed while the minimap is on: neither side takes the other's
+g2.setting('GPS3D_GridBudget', 2400); g2.setting('GPS3D_BuildingBudget', 3000)
+r3 = nudge(g2, 2); seen3 = str(g2.G.BUDGET_SEEN)
+g2.slash('/gps 3d'); g2.tick(3)
+win = budgets(N2)
+g2.close_all(); g2.tick(3); r4 = nudge(g2, 3); seen4 = str(g2.G.BUDGET_SEEN)
+check("independent: the 3D window opens at its own detail (its defaults, then values changed while the minimap is on), and those leave the minimap's alone",
+      r2 and win0 == '3200 4000' and r3 and r4 and seen3 == '600 750' and win == '2400 3000' and seen4 == '600 750' and M2.grid == 600 and M2.detail == 750 and g2.G.GPS3D_DB.grid == 2400,
+      f'the 3D window at its defaults {win0}; minimap draws at {seen3} / {seen4}, the 3D window at {win}')
+saved2 = str(g2.G.SANDBOX_SAVE('GnomishPositioningSystemDB,GPS3D_DB'))
 del g2
+g3 = Game(saved2); g3.tick(3)
+check('the minimap\'s detail kept over a reload (and shown on the settings page)',
+      g3.mm.grid == 600 and g3.mm.detail == 750 and g3.control('GPS3D_MinimapGrid')['value'] == 600 and g3.control('GPS3D_MinimapBuildings')['value'] == 750,
+      f'{g3.mm.grid} {g3.mm.detail}')
+o1 = g3.slash('/gps minimap ground 900'); o2 = g3.slash('/gps minimap buildings 99999'); o3 = g3.slash('/gps minimap ground')
+check('/gps minimap ground|buildings <n>: set at once (rounded to the slider\'s step, kept in range) and said; without a number the range and the value',
+      g3.mm.grid == 1000 and g3.mm.detail == 4000 and g3.G.GPS3D_DB.minimapGrid == 1000 and 'ground detail: 1000' in o1 and 'building detail: 4000' in o2
+      and 'now 1000' in o3 and '400 to 3200' in o3, f'{o1!r} {o2!r} {o3!r}')
+del g3
 
 # ---- fallback: instance, indoors, no terrain; and back
 g.dungeon(); g.loading_screen(); g.tick(3)

@@ -91,7 +91,7 @@ want = [('header', 'Map window'), ('choice', 'Opens as'), ('check', "Traditional
         ('header', '3D view'), ('choice', 'You are shown as'), ('choice', 'Camera on you'), ('check', 'Look straight down'), ('check', 'Buildings'),
         ('slider', 'Building detail'), ('choice', 'Buildings close up'), ('check', 'Props and trees'), ('slider', 'Props and trees at most'),
         ('slider', 'Model distance'), ('slider', 'Smallest model'), ('slider', 'Ground detail'), ('slider', 'Turn your character'),
-        ('header', 'Minimap'), ('check', 'Use GPS as minimap'), ('slider', 'Minimap tilt'),
+        ('header', 'Minimap'), ('check', 'Use GPS as minimap'), ('slider', 'Minimap tilt'), ('slider', 'Minimap ground detail'), ('slider', 'Minimap building detail'),
         ('header', 'Position fixes'), ('check', "Swap the map's axes"), ('check', 'Turn the arrow the other way'),
         ('header', 'Debug log'), ('check', 'Keep a debug log'), ('button', 'Debug log')]
 check('page: sections and controls in order', layout == want, str(layout))
@@ -121,6 +121,8 @@ fresh = {
     # (GPS3D's Minimap.lua, since 2026-10-22: off, and the tilt it starts with)
     'GPS3D_Minimap': re.search(r'\ton = (\w+),', open(f'{SITE}/addons/GPS3D/Minimap.lua').read()).group(1) == 'true',
     'GPS3D_MinimapTilt': int(re.search(r'\ttilt = (\d+),', open(f'{SITE}/addons/GPS3D/Minimap.lua').read()).group(1)),
+    'GPS3D_MinimapGrid': int(re.search(r'\tgrid = (\d+),', open(f'{SITE}/addons/GPS3D/Minimap.lua').read()).group(1)),
+    'GPS3D_MinimapBuildings': int(re.search(r'\tdetail = (\d+),', open(f'{SITE}/addons/GPS3D/Minimap.lua').read()).group(1)),
 }
 bad = [(c['var'], c['default'], fresh[c['var']]) for c in controls if c.get('var') and c['default'] != fresh[c['var']]]
 check('each default equals the code\'s own starting value', not bad and len([c for c in controls if c.get('var')]) == len(fresh), str(bad))
