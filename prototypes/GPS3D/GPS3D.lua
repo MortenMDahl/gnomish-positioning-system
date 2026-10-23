@@ -838,7 +838,7 @@ local function BuildBlockMesh(g)
 	return mesh
 end
 
-local useDetail = true
+local useDetail = false -- (proof of concept branch: the old building blocks are off unless switched on; the game's own buildings are drawn instead, PocModels.lua)
 
 -- Ground height at a world point: the building mesh where there is one, else the grid, else 0.
 local function GroundHeight(map, x, y)
@@ -1925,6 +1925,7 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 					end
 				end
 			end
+			if mesh and ns.PocCovers and ns.PocCovers(e.x0 + BLOCK / 2, e.y1 - BLOCK / 2) then mesh = nil; e.poc = true else e.poc = nil end -- (proof of concept: the game's models drawn here instead)
 			if mesh then
 				local key = -(e.bk * 4 + lv)
 				mesh.key = key
@@ -1941,12 +1942,14 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 				if ab.frame ~= frameNo then wipe(ab); ab.frame = frameNo end
 				ab[e.bi] = true
 				stats.detail = stats.detail + 1
-			else
+			elseif not e.poc then
 				stats.detailSkipped = stats.detailSkipped + 1
 			end
 		end
 		stats.detailTris = drawn
 	end
+	-- (proof of concept, branch poc-models: simplified 3D building models, PocModels.lua)
+	if ns.ExtraMeshes then nActive = ns.ExtraMeshes(active, nActive, frameNo) end
 	-- hide what is not drawn this frame; give back textures of meshes unused for a while
 	local crowded = poolMade - poolN > TEX_LIMIT
 	stats.texMade, stats.texFree = poolMade, poolN
@@ -1972,7 +1975,7 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 		local vxs, vys, vhs, px, py, pd = mesh.vx, mesh.vy, mesh.vh, mesh.px, mesh.py, mesh.pd
 		local fixed = mesh.fixed or NOFIXED
 		local lo, hi = HUGE, -HUGE
-		for k = 1, #vxs do
+		for k = 1, mesh.nv or #vxs do -- (proof of concept: model cells draw only their first nv vertices)
 			local x, y, z = vxs[k] - cx, vys[k] - cy, vhs[k] - cz
 			local d = x * fx + y * fy + z * fz
 			pd[k] = d
@@ -2006,14 +2009,33 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	for i = 1, nActive do
 		local mesh = active[i]
 		local px, py, pd, under, tris = mesh.px, mesh.py, mesh.pd, mesh.under, mesh.tris
-		for k = 1, #tris do
+		local nt = mesh.nt or #tris -- (proof of concept: model cells draw only their nt biggest parts)
+		for k = 1, nt do
 			local t = tris[k]
 			local a, b, c = t.a, t.b, t.c
 			local da, db, dc = pd[a], pd[b], pd[c]
 			local depth
-			if da > CLIP_D and db > CLIP_D and dc > CLIP_D then
+			local q4 = t.d -- (proof of concept: a 4-corner part of the game's models, corners a b c d around it)
+			if q4 then
+				local dd = pd[q4]
+				if da > CLIP_D and db > CLIP_D and dc > CLIP_D and dd > CLIP_D then
+					local ax, ay, bx, by, cx_, cy_, qx4, qy4 = px[a], py[a], px[b], py[b], px[c], py[c], px[q4], py[q4]
+					if mesh.twoSided or t.both or (bx - ax) * (cy_ - ay) - (cx_ - ax) * (by - ay) > 0 then
+						local tex = t.tex
+						if ax ~= t.x1 or ay ~= t.y1 then SetVertexOffset(tex, 1, ax + 0.5, ay - 0.5); t.x1, t.y1 = ax, ay end -- upper left  = a
+						if bx ~= t.x2 or by ~= t.y2 then SetVertexOffset(tex, 2, bx + 0.5, by + 0.5); t.x2, t.y2 = bx, by end -- lower left  = b
+						if qx4 ~= t.x3 or qy4 ~= t.y3 then SetVertexOffset(tex, 3, qx4 - 0.5, qy4 - 0.5); t.x3, t.y3 = qx4, qy4 end -- upper right = d
+						if cx_ ~= t.x4 or cy_ ~= t.y4 then SetVertexOffset(tex, 4, cx_ - 0.5, cy_ + 0.5); t.x4, t.y4 = cx_, cy_ end -- lower right = c
+						depth = (da + db + dc + dd) / 4
+					else
+						culled = culled + 1
+					end
+				else
+					behind = behind + 1 -- (one crossing the near plane is not drawn: no cutting of 4-corner parts yet)
+				end
+			elseif da > CLIP_D and db > CLIP_D and dc > CLIP_D then
 				local ax, ay, bx, by, cx_, cy_ = px[a], py[a], px[b], py[b], px[c], py[c]
-				if (bx - ax) * (cy_ - ay) - (cx_ - ax) * (by - ay) > 0 then
+				if mesh.twoSided or t.both or (bx - ax) * (cy_ - ay) - (cx_ - ax) * (by - ay) > 0 then -- (proof of concept: models drawn from both sides)
 					local tex = t.tex
 					if t.clipped then
 						t.clipped = false
@@ -2049,6 +2071,7 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 				visible[nVisible] = t
 				local tex = t.tex
 				if under and under[t.blk] then depth = depth + DETAIL_BIAS end
+				if mesh.poc then depth = depth - DETAIL_BIAS end -- (proof of concept: models drawn over the ground as building blocks are)
 				local bucket = floor((dmax - depth) * scale)
 				if bucket < 0 then bucket = 0 elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
 				if bucket ~= t.bucket or tex.bucketFrame ~= t.frame then
@@ -2064,6 +2087,9 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 				t.shown = false; t.tex:Hide()
 			end
 		end
+		local np = mesh.ntPrev -- (proof of concept: parts no longer drawn in a model cell)
+		if np and np > nt then for k = nt + 1, np do local t = tris[k]; if t.shown then t.shown = false; t.tex:Hide() end end end
+		if mesh.nt then mesh.ntPrev = nt end
 	end
 	for n = nVisible + 1, #visible do visible[n] = nil end
 	stats.shown, stats.culled, stats.behind, stats.cut = nVisible, culled, behind, cut
@@ -2937,6 +2963,7 @@ ns.SetModelYaw = function(degrees) ns.DB().modelYaw = rad(degrees); ns.Redraw() 
 ns.Budgets = function() return TRI_BUDGET, DETAIL_BUDGET, useDetail end
 ns.SetBudgets = function(grid, buildings) TRI_BUDGET, DETAIL_BUDGET = grid, buildings end -- (not saved: the minimap's own, Minimap.lua)
 ns.RenderWorld = RenderWorld -- (the ground and buildings only: the minimap, Minimap.lua)
+ns.AcquireTex, ns.ReleaseTex, ns.SetTriColour, ns.SetTriTexture, ns.MinimapFile, ns.SUN = AcquireTex, ReleaseTex, SetTriColour, SetTriTexture, MinimapFile, SUN -- (PocModels.lua)
 ns.RenderMarker = RenderMarker
 
 GPS3D_API.settings = {
@@ -2968,9 +2995,9 @@ GPS3D_API.settings = {
 		set = function(v) SetTopDown(v, not frame:IsShown()) end,
 	},
 	{
-		kind = "check", key = "GPS3D_Buildings", name = "Buildings",
-		tooltip = "Buildings, bridges and walls close up. Off: the ground only (/gps3d detail).",
-		default = true,
+		kind = "check", key = "GPS3D_Buildings", name = "Simple buildings (old)",
+		tooltip = "The old simple building blocks (jagged). Off by default: the game's own buildings are drawn where GPS has them (/gps3d detail).",
+		default = false,
 		get = function() return GPS3D_DB and GPS3D_DB.detail end,
 		set = function(v) ns.SetDetail(v) end,
 	},
@@ -3077,6 +3104,8 @@ SlashCmdList.GPS3D = function(msg)
 		Render()
 	elseif cmd == "probe" then
 		ns.Probe(arg)
+	elseif cmd == "poc" and ns.poc then
+		print("|cff55ff55GPS3D|r poc: " .. ns.poc.Command(arg or ""))
 	elseif cmd == "cam" then
 		print("|cff55ff55GPS3D|r forward", scene:GetCameraForward())
 		print("|cff55ff55GPS3D|r right", scene:GetCameraRight())

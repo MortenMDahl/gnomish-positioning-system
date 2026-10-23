@@ -48,3 +48,4 @@ QuestAreas.lua
 OnDemand.lua
 Minimap.lua
 Probe.lua
+PocModels.lua

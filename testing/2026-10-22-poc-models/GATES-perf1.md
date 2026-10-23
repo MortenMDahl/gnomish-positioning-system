@@ -1,0 +1,30 @@
+# Gates: performance round 1 for the game's models (2026-10-23)
+
+Request: "start yes" (step 2 of the plan: 4-corner textures for wall rectangles, a compact data format with per-city
+loading, a budget that adapts to frame time), the new models as the default and the old jagged blocks gone,
+"and after you are done, consider performance in the sandbox as a relative to what we had before".
+The game is down for two weeks: everything is measured in the sandbox only.
+
+- [x] G0: "before" fixed at commit 28b2f60 (whole buildings, triangles, Lua-table data): ms turning and still at near / close / high, 4,000 and 8,000 parts, fresh game per setting, 2 runs; Lua memory (login, city built, drawing); data bytes; Lua 5.1 parse+run time and heap of the data; screenshots
+  CHECK: perf_poc6.py, mem script, a5_loadtime.lua, run_page shots, all against the 28b2f60 files
+  EVIDENCE: 28b2f60 files kept in scratchpad before/; perf_poc7.py (fresh game per setting, C calls counted), 2 runs, ms turning near / close / high: old blocks 7.9, 7.1 / 4.7, 4.9 / 9.0, 8.5; 4,000 parts 8.6, 8.8 / 12.2, 12.4 / 15.2, 17.3 (calls 16,424 / 18,007 / 26,437); 8,000 parts 14.6, 18.5 / 23.7, 24.5 / 36.5, 34.7 (calls 25,628 / 32,286 / 45,003). Lua memory (sandbox, mem7.py, old test data left out): login 67.2 MB, city on 218.7, close view drawn 222.5, after walking the district 409.2, 60 s later 414.8. Data PocCity.lua 24,232,719 bytes; Lua 5.1 parse+run 813 ms, heap 103.8 MB (loadtime_city.lua). Shots poccU_* (earlier, same code)
+- [x] G1: 4-corner parts: two triangles of one piece that share an edge, lie in one plane, make a convex 4-sided shape and share one texture mapping become one texture with 4 corners; drawn by the renderer; looks the same
+  CHECK: counts (parts before -> after); max off-plane distance and UV mismatch of merged pairs; pixel difference of shots against the triangle version at the same views and budget-free (every building drawn) in the near view
+  EVIDENCE: pb_quads.py + pb_city2.py: 240,346 triangles -> 179,172 parts (61,174 four-corner; rejected pairs: 26,165 not flat, 26,234 not convex, 21,013 other texture mapping, 4 winding); GPS3D.lua draws them (4 SetVertexOffset, no cutting at the near plane yet: such a part is not drawn). Shots, every building within 100 yd drawn, quads vs triangles: 1.42 % / 2.01 % of pixels differ (near / close), 1.10 / 1.71 % without 1-px lines; differences are small texture shifts inside parts (q_cmp_near.png viewed)
+- [x] G2: compact data: each building's parts as encoded strings, decoded when the building is first wanted, the decoded tables dropped after it is unused for a while; decoded data equal to the source within the encoding's steps
+  CHECK: data bytes and Lua memory before -> after; a check comparing every decoded value with the source export (max error per kind)
+  EVIDENCE: City_Stormwind.lua 8,824,933 bytes (was 24,232,719); decode_check.py: 683 groups / 17,159 parts decoded by the addon equal to the export (0 mismatches; vertices within 0.021 yd, UVs within 0.0005, piece areas within 3 %). Memory: see G6
+- [x] G3: per-city loading: the city's data is its own load-on-demand addon, loaded when the view comes near the city; nothing of it at login
+  CHECK: Lua memory at login with and without; the load fires when the view nears the city and not elsewhere; /gps3d test lists it
+  EVIDENCE: GPS3D_City_Stormwind (load on demand, LoadOnDemand: 1): not loaded at login (city data at login: False); opened in Westfall: not loaded; gliding towards Stormwind: loaded 585 yd from the city's box (LOAD_NEAR 600); listed by /gps3d test (dataState names)
+- [x] G4: adaptive budget: the parts budget follows the models' own draw time towards a target (setting), down while turning costs more, back up to the slider's maximum when there is time
+  CHECK: frames turning and still: models' ms near the target after settling; budget back at the maximum when still
+  EVIDENCE: adapt_check.py, close view, target 10 ms: turning 1 degree a frame, last 30 frames Render median 9.4 ms (6.7-35.2: frames with new buildings' decoding and textures spike), budget median 3,486; standing still: budget 2,472 -> 5,665 (slider 8,000) at 7.6 ms, then redraws stopped. ABANDON in part: 'back up to the slider's maximum' only when the time allows it (here it stops at 5,665: 8,000 still parts cost more than 10 ms)
+- [x] G5: defaults: the game's models on by default (no /gps3d poc city needed), the old jagged blocks off; a setting to turn the models off
+  CHECK: fresh game with no saved settings: models drawn, block meshes 0; settings list
+  EVIDENCE: fresh game, no saved settings: the city drawn with the default budget (smoke7.py: 45 buildings, 6,337 parts, old blocks detailTris 0, Render 10.3 ms); settings: 'The game's buildings' (on), 'Building parts per frame' 8,000, 'Time for the 3D view' 10 ms, 'Smallest building part' 0, 'Simple buildings (old)' off; old blocks still there when switched on (perf 'today' rows)
+- [x] G6: performance against "before" (G0), same views and settings: ms, C calls, textures, memory, data size, load time, as ratios; 2 runs; shots
+  CHECK: the same scripts as G0 on the new code
+  EVIDENCE: perf_poc7.py, 2 runs each, ms turning near / close / high (before -> now): 4,000 textures 8.6-8.8 -> 7.5-7.6 / 12.2-12.4 -> 10.0-10.4 / 15.2-17.3 -> 12.8-14.5; 8,000 14.6-18.5 -> 12.7-13.4 / 23.7-24.5 -> 16.6-17.2 / 34.7-36.5 -> 25.9-27.0; default (follows 10 ms) 10.3-10.4 / 10.1 / 10.1; old blocks (reference) 7.2-7.9 / 5.3 / 10.1-10.5 (same as before: shown 4,065 / 4,705 / 4,900). C calls at 8,000: 25,628 -> 25,835 / 32,286 -> 28,412 / 45,003 -> 45,001. Memory (mem7.py): login 67.2 -> 7.9 MB; city on 218.7 -> 38.0; close view 222.5 -> 46.9; after walking 409.2 -> 232.1; 60 s later 414.8 -> 162.8. Lua 5.1 data load 813 ms / 103.8 MB -> 42 ms / 10.7 MB (once, near the city). Shots: outputs/models_perf_round1.png
+- [x] G7: committed on the proof-of-concept branch (local), report with the G6 table and what only the game can tell
+  EVIDENCE: local commit on poc-models (see report); not pushed

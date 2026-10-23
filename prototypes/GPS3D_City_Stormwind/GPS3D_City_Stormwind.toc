@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: GPS 3D data: Stormwind, the game's buildings
+## Notes: The game's own building models of Stormwind for GPS 3D (proof of concept). Loaded by GPS 3D when its 3D view comes near the city (load on demand).
+## Version: 0.5.0
+## X-License: MIT
+## LoadOnDemand: 1
+## Dependencies: GPS3D
+
+Link.lua
+City_Stormwind.lua

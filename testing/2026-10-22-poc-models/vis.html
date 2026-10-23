@@ -1,0 +1,37 @@
+<!doctype html><html><body style="margin:0">
+<script type="module">
+import * as THREE from './three.module.min.js';
+window.runVis = async (name, S) => {
+  const box = (await (await fetch(name + '_box.txt')).text()).split(' ').map(Number);
+  const [cx, cz, R, hmin, hmax, ntri] = box;
+  const tris = new Float32Array(await (await fetch(name + '_tris.f32')).arrayBuffer());
+  const ground = new Float32Array(await (await fetch(name + '_ground.f32')).arrayBuffer());
+  const n = tris.length / 9;
+  const id = new Uint8Array(n * 9);
+  for (let t = 0; t < n; t++) { const v = t + 1; for (let k = 0; k < 3; k++) { id[t * 9 + k * 3] = v & 255; id[t * 9 + k * 3 + 1] = (v >> 8) & 255; id[t * 9 + k * 3 + 2] = (v >> 16) & 255; } }
+  const mat = new THREE.ShaderMaterial({ vertexShader: 'attribute vec3 idc; varying vec3 c; void main(){ c = idc; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: 'varying vec3 c; void main(){ gl_FragColor = vec4(c,1.0); }', side: THREE.DoubleSide });
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(tris, 3)); g.setAttribute('idc', new THREE.BufferAttribute(id, 3, true));
+  const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(ground, 3)); gg.setAttribute('idc', new THREE.BufferAttribute(new Uint8Array(ground.length), 3, true));
+  const scene = new THREE.Scene(); scene.add(new THREE.Mesh(g, mat)); scene.add(new THREE.Mesh(gg, mat));
+  const renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1); renderer.setSize(S, S); renderer.outputColorSpace = THREE.LinearSRGBColorSpace; renderer.setClearColor(0x000000, 1);
+  document.body.appendChild(renderer.domElement);
+  const gl = renderer.getContext(); const buf = new Uint8Array(S * S * 4);
+  const seen = new Uint32Array(n + 1);
+  const dirs = [[90, 0]]; for (const e of [65, 45, 30]) for (let a = 0; a < 360; a += 45) dirs.push([e, a + (e === 45 ? 22.5 : 0)]);
+  const tgt = new THREE.Vector3(cx, (hmin + hmax) / 2, cz);
+  for (const [e, a] of dirs) {
+    const er = e * Math.PI / 180, ar = a * Math.PI / 180;
+    const d = new THREE.Vector3(Math.cos(er) * Math.sin(ar), Math.sin(er), Math.cos(er) * Math.cos(ar));
+    const half = R * 1.05 + (hmax - hmin) * Math.cos(er);
+    const cam = new THREE.OrthographicCamera(-half, half, half, -half, 1, 6000);
+    cam.position.copy(tgt).addScaledVector(d, 3000); cam.up.set(0, e > 89 ? 0 : 1, e > 89 ? -1 : 0); cam.lookAt(tgt);
+    renderer.render(scene, cam);
+    gl.readPixels(0, 0, S, S, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    for (let i = 0; i < S * S; i++) { const v = buf[i * 4] | (buf[i * 4 + 1] << 8) | (buf[i * 4 + 2] << 16); if (v) seen[v]++; }
+  }
+  return Array.from(seen.subarray(1));
+};
+window.READY = true;
+</script></body></html>

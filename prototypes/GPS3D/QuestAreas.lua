@@ -61,7 +61,7 @@ end
 -- Heights of a shape's corners on the ground under them (once per shape, again if buildings are
 -- switched on or off).
 local function Heights(s)
-	local key = not (GPS3D_DB and GPS3D_DB.detail == false)
+	local key = (GPS3D_DB and GPS3D_DB.detail) and true or false
 	if s.h3d and s.h3dKey == key then return s.h3d end
 	local h = {}
 	for v = 1, s.nv do h[v] = ns.GroundHeight(s.gx[v] * TILE, -s.gy[v] * TILE, s.map) end

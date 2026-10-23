@@ -80,6 +80,9 @@ local function Load(name, why)
 	return false
 end
 
+-- (proof of concept: the game's buildings, one data addon per city, PocModels.lua) load one by name; true when loaded
+ns.LoadDataAddon = Load
+
 -- Called by Render before each frame of the world (not the planet): loads what the view is about to need.
 -- Makes no tables; when the view's centre has moved less than RECHECK yards it only compares numbers.
 ns.WantData = function()
@@ -89,7 +92,7 @@ ns.WantData = function()
 	end
 	local map = cam.map
 	local parts = ns.DetailParts and ns.DetailParts[map]
-	if not parts or (GPS3D_DB and GPS3D_DB.detail == false) or cam.dist > ns.DETAIL_DIST + TILE then
+	if not parts or not (GPS3D_DB and GPS3D_DB.detail) or cam.dist > ns.DETAIL_DIST + TILE then
 		D.dirty = true -- (looked up again as soon as buildings can be drawn)
 		return
 	end
@@ -120,7 +123,7 @@ ns.DetailFor = function(map, key)
 	local parts = ns.DetailParts and ns.DetailParts[map]
 	local p = parts and parts.tiles[key]
 	local name = p and parts[p]
-	if not name or D.state[name] == "loaded" or (GPS3D_DB and GPS3D_DB.detail == false) then return false end
+	if not name or D.state[name] == "loaded" or not (GPS3D_DB and GPS3D_DB.detail) then return false end
 	if Load(name, "buildings") then ns.DataArrived() return true end
 	return false
 end
