@@ -264,7 +264,8 @@ const TILE = 1600 / 3;
 // ADDONS-BEGIN
 const ADDONS = [
   {"name": "GnomishPositioningSystem", "files": ["Data/MapTiles.lua", "Debug.lua", "Core.lua", "World.lua", "MapWindow.lua", "Quests.lua", "Compat.lua", "MapKey.lua", "Settings.lua"], "saved": "GnomishPositioningSystemDB,GnomishPositioningSystemLog"},
-  {"name": "GPS3D", "files": ["Data/World_0.lua", "Data/World_1.lua", "Data/World_30.lua", "Data/World_33.lua", "Data/World_36.lua", "Data/World_47.lua", "Data/World_169.lua", "Data/World_209.lua", "Data/World_289.lua", "Data/World_309.lua", "Data/World_329.lua", "Data/World_469.lua", "Data/World_489.lua", "Data/World_509.lua", "Data/World_529.lua", "Data/World_531.lua", "Data/DetailParts.lua", "Data/Globe.lua", "Data/Lod_0.lua", "Data/Lod_1.lua", "Data/Lod_30.lua", "Data/Lod_33.lua", "Data/Lod_36.lua", "Data/Lod_47.lua", "Data/Lod_169.lua", "Data/Lod_209.lua", "Data/Lod_289.lua", "Data/Lod_309.lua", "Data/Lod_329.lua", "Data/Lod_469.lua", "Data/Lod_489.lua", "Data/Lod_509.lua", "Data/Lod_529.lua", "Data/Lod_531.lua", "GPS3D.lua", "Terrain.lua", "Models.lua", "Globe.lua", "QuestAreas.lua", "OnDemand.lua", "Minimap.lua", "Probe.lua", "PocData.lua", "PocModels.lua"], "saved": "GPS3D_DB"},
+  {"name": "GPS3D", "files": ["Data/World_0.lua", "Data/World_1.lua", "Data/World_30.lua", "Data/World_33.lua", "Data/World_36.lua", "Data/World_47.lua", "Data/World_169.lua", "Data/World_209.lua", "Data/World_289.lua", "Data/World_309.lua", "Data/World_329.lua", "Data/World_469.lua", "Data/World_489.lua", "Data/World_509.lua", "Data/World_529.lua", "Data/World_531.lua", "Data/DetailParts.lua", "Data/Globe.lua", "Data/Lod_0.lua", "Data/Lod_1.lua", "Data/Lod_30.lua", "Data/Lod_33.lua", "Data/Lod_36.lua", "Data/Lod_47.lua", "Data/Lod_169.lua", "Data/Lod_209.lua", "Data/Lod_289.lua", "Data/Lod_309.lua", "Data/Lod_329.lua", "Data/Lod_469.lua", "Data/Lod_489.lua", "Data/Lod_509.lua", "Data/Lod_529.lua", "Data/Lod_531.lua", "GPS3D.lua", "Terrain.lua", "Models.lua", "Globe.lua", "QuestAreas.lua", "OnDemand.lua", "Minimap.lua", "Probe.lua", "PocModels.lua", "Shells.lua"], "saved": "GPS3D_DB"},
+  {"name": "GPS3D_City_Stormwind", "files": ["Link.lua", "Shells_Stormwind.lua"], "lod": true},
   {"name": "GPS3D_EK1", "files": ["Link.lua", "Detail_0_1.lua"], "lod": true},
   {"name": "GPS3D_EK2", "files": ["Link.lua", "Detail_0_2.lua"], "lod": true},
   {"name": "GPS3D_EK3", "files": ["Link.lua", "Detail_0_3.lua"], "lod": true},
@@ -532,6 +533,8 @@ function textureFor(key) {
   // the planet view's art (GPS3D\Globe\*.tga; PNG copies from scripts/build_globe.py), drawn clamped
   else if (norm.startsWith("interface\\addons\\gps3d\\globe\\")) loadImage("globe/" + norm.split("\\").pop() + ".png", { mip: true, repeat: false }, done());
   else if (key.startsWith("fdid:") && POC_TEX.has(Number(key.slice(5)))) loadImage("poctex/" + key.slice(5) + ".png", { mip: true, repeat: true }, done());
+  // (proof of concept S1, branch poc-shells: the building shells' baked pages, GPS3D_City_<name>\Shells\L<level>_<page>; JPEG copies here)
+  else if (/^interface\\addons\\gps3d_city_[a-z]+\\shells\\/.test(norm)) loadImage("shells/" + norm.split("\\").pop().toUpperCase() + ".jpg", { mip: true, repeat: false }, done());
   else if (key.startsWith("fdid:")) {
     const info = fdidInfo.get(Number(key.slice(5)));
     const name = info && `${info.map}_${info.x}_${info.y}`;

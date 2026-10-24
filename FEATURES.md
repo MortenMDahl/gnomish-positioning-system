@@ -6,6 +6,7 @@ Ideas to build, found while testing. Newest at the bottom; move an item to "Done
 
 1. **Map picker from the title.** Clicking the map's name at the top left opens a menu of every map, sorted in folders (for example Continents, Kalimdor and Eastern Kingdoms zones, Dungeons, Raids, Battlegrounds, Forever's own maps), to jump straight to one instead of stepping through them with `<` `>`; easy to go back and forth between folders and maps. (2026-10-21)
 2. **Steep cliffs without streaks.** The 3D ground is coloured from the top-down minimap images, which have no detail on steep faces, so steep cliffs (Orgrimmar's canyon) show stretched streaks; a rock colour or texture for steep faces would help. (2026-10-21)
+3. **Zone names on the 2D map when zoomed out.** Zoomed out on the 2D map, each zone's name drawn over it (as Blizzard's continent maps label their zones), so a continent reads at a glance. (2026-10-24, Morten's idea)
 
 ## Done
 

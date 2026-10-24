@@ -43,7 +43,7 @@ local STEP = TILE / 512            -- vertex spacing of the building meshes (1.0
 local WHITE = "Interface\\Buttons\\WHITE8X8"
 local LAYERS = { "BACKGROUND", "BORDER", "ARTWORK", "OVERLAY" }
 local LAYER_BUCKETS = #LAYERS * 16 -- draw order buckets within one frame (layer x sublevel -8..7)
-local BUCKET_FRAMES = 8            -- frames stacked by level: 8 x 64 = 512 depth buckets
+local BUCKET_FRAMES = 16           -- frames stacked by level: 16 x 64 = 1024 depth buckets (8 until the shells of 2026-10-24)
 local FOV = math.rad(50)           -- vertical field of view
 local NEAR = 1
 local WALL_STEEPNESS = 0.45        -- |normal up| below this: a wall, not ground
@@ -2001,7 +2001,11 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 		if hi > dmax then dmax = hi end
 	end
 	-- cull, sort into buckets and draw: one pass over the triangles
-	local scale = (TOTAL_BUCKETS - 0.001) / max(dmax - dmin, 1e-6)
+	-- (proof of concept S1, Shells.lua: building shells drawn above the ground in buckets of their own, ordered by
+	-- their faces' horizontal distance from the camera, log-spaced; the ground keeps the first sr.ground buckets)
+	local sr, tb, skl, sks = ns.shellRange, TOTAL_BUCKETS, nil, nil
+	if sr and sr.on then tb = sr.ground; skl = math.log(sr.kmin); sks = (TOTAL_BUCKETS - tb - 0.001) / max(math.log(sr.kmax) - skl, 1e-6) end
+	local scale = (tb - 0.001) / max(dmax - dmin, 1e-6)
 	stats.dmin, stats.dmax = dmin, dmax
 	do local w, h = canvas:GetSize(); clipW, clipH = w / 2 + 2, h / 2 + 2 end
 	local visible, nVisible, culled, behind, cut = stats.visible or {}, 0, 0, 0, 0
@@ -2071,9 +2075,24 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 				visible[nVisible] = t
 				local tex = t.tex
 				if under and under[t.blk] then depth = depth + DETAIL_BIAS end
-				if mesh.poc then depth = depth - DETAIL_BIAS end -- (proof of concept: models drawn over the ground as building blocks are)
-				local bucket = floor((dmax - depth) * scale)
-				if bucket < 0 then bucket = 0 elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
+				if mesh.poc then -- (proof of concept: models drawn over the ground as building blocks are; shells sorted unit by unit)
+					local ud = mesh.ud
+					if ud then depth = ud + (depth - ud) * mesh.uk end
+					depth = depth - DETAIL_BIAS
+				end
+				local bucket
+				if skl and mesh.hk then
+					local vx_, vy_ = mesh.vx, mesh.vy
+					local mx, my
+					if q4 then mx, my = (vx_[a] + vx_[b] + vx_[c] + vx_[q4]) / 4 - cx, (vy_[a] + vy_[b] + vy_[c] + vy_[q4]) / 4 - cy
+					else mx, my = (vx_[a] + vx_[b] + vx_[c]) / 3 - cx, (vy_[a] + vy_[b] + vy_[c]) / 3 - cy end
+					local k = sqrt(mx * mx + my * my)
+					bucket = TOTAL_BUCKETS - 1 - floor((math.log(k > sr.kmin and k or sr.kmin) - skl) * sks)
+					if bucket < tb then bucket = tb elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
+				else
+					bucket = floor((dmax - depth) * scale)
+					if bucket < 0 then bucket = 0 elseif bucket >= tb then bucket = tb - 1 end
+				end
 				if bucket ~= t.bucket or tex.bucketFrame ~= t.frame then
 					t.bucket = bucket
 					local f = floor(bucket / LAYER_BUCKETS) + 1
@@ -3104,6 +3123,8 @@ SlashCmdList.GPS3D = function(msg)
 		Render()
 	elseif cmd == "probe" then
 		ns.Probe(arg)
+	elseif cmd == "shells" and ns.shells then
+		print("|cff55ff55GPS3D|r shells: " .. ns.shells.Command(arg or ""))
 	elseif cmd == "poc" and ns.poc then
 		print("|cff55ff55GPS3D|r poc: " .. ns.poc.Command(arg or ""))
 	elseif cmd == "cam" then

@@ -1,0 +1,48 @@
+<!doctype html><html><body style="margin:0">
+<script type="module">
+// S1 shells: bakes face pictures into atlas pages. The game geometry (sh_geo.bin: positions, UVs, shade per vertex)
+// in groups per unit and texture; each picture renders its unit's group with an orthographic camera along the face
+// normal into its rectangle of the page (scissored), colour = texture x shade in gamma space (as the client
+// multiplies), alpha 1 where geometry is, 0 elsewhere.
+import * as THREE from './three.module.min.js';
+window.initBake = async (pageSize) => {
+  const meta = await (await fetch('sh_geo.json')).json();
+  const buf = await (await fetch('sh_geo.bin')).arrayBuffer();
+  const n = meta.n;
+  const pos = new Float32Array(buf, 0, n * 9), uv = new Float32Array(buf, n * 36, n * 6), sh = new Float32Array(buf, n * 60, n * 3);
+  const loader = new THREE.TextureLoader(); const texCache = {};
+  const vs = 'attribute float shade; varying vec2 vUv; varying float vS; void main(){ vUv = uv; vS = shade; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+  const fs = 'uniform sampler2D map; varying vec2 vUv; varying float vS; void main(){ gl_FragColor = vec4(texture2D(map, vUv).rgb * vS, 1.0); }';
+  window.units = {};
+  for (const [unit, tex, both, a, cnt] of meta.groups) {
+    let t = texCache[tex];
+    if (!t) { t = await loader.loadAsync('tex/' + tex + '.png'); t.colorSpace = THREE.NoColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.flipY = false; t.anisotropy = 8; texCache[tex] = t; }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos.subarray(a * 9, (a + cnt) * 9), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv.subarray(a * 6, (a + cnt) * 6), 2));
+    g.setAttribute('shade', new THREE.BufferAttribute(sh.subarray(a * 3, (a + cnt) * 3), 1));
+    const m = new THREE.ShaderMaterial({ vertexShader: vs, fragmentShader: fs, uniforms: { map: { value: t } }, side: both ? THREE.DoubleSide : THREE.FrontSide });
+    (window.units[unit] ||= new THREE.Group()).add(new THREE.Mesh(g, m));
+  }
+  const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true, premultipliedAlpha: false });
+  r.setPixelRatio(1); r.setSize(pageSize, pageSize); r.outputColorSpace = THREE.LinearSRGBColorSpace; r.autoClear = false; r.setScissorTest(true);
+  document.body.appendChild(r.domElement); window.R = r; window.PAGE = pageSize;
+  return Object.keys(window.units).length;
+};
+window.bakePage = (jobs) => {
+  const r = window.R, P = window.PAGE;
+  r.setScissor(0, 0, P, P); r.setViewport(0, 0, P, P); r.setClearColor(0x000000, 0); r.clear();
+  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
+  let missing = 0;
+  for (const j of jobs) {
+    const D = 50, o = new THREE.Vector3(...j.o), nn = new THREE.Vector3(...j.n);
+    cam.left = j.u0; cam.right = j.u1; cam.bottom = j.v0; cam.top = j.v1; cam.near = D - j.front; cam.far = D + j.back;
+    cam.position.copy(o).addScaledVector(nn, D); cam.up.set(...j.v); cam.lookAt(o); cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+    const y = P - j.y - j.h;
+    r.setViewport(j.x, y, j.w, j.h); r.setScissor(j.x, y, j.w, j.h);
+    for (const u of j.units) { const grp = window.units[u]; if (grp) r.render(grp, cam); else missing++; }
+  }
+  return [r.domElement.toDataURL('image/png'), missing];
+};
+window.READY = true;
+</script></body></html>

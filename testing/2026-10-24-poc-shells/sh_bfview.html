@@ -1,0 +1,40 @@
+<!doctype html><html><head><style>html,body{margin:0;background:#081110}</style></head><body>
+<script type="module">
+// z-buffer reference renderer for the per-building try: meshes as groups by texture (non-indexed, per-face shade
+// like the addon: 0.55 + 0.45 |n . SUN|); grey groups have f = 0
+import * as THREE from './three.module.min.js';
+const P = new URLSearchParams(location.search); const W = +(P.get('w') || 898), H = +(P.get('h') || 648); const cam = JSON.parse(P.get('cam'));
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); renderer.setSize(W, H); document.body.appendChild(renderer.domElement);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x081110);
+const camera = new THREE.PerspectiveCamera(+(P.get('fov') || 50), W / H, 0.5, 8000);
+camera.position.set(cam[0], cam[2], -cam[1]); camera.lookAt(cam[0] + cam[3], cam[2] + cam[5], -(cam[1] + cam[4]));
+const b64 = s => { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u.buffer; };
+const SUN = new THREE.Vector3(-0.4, 0.8, 0.35).normalize();   // (GPS east, up, south -> three x, y, z = -north)
+const loader = new THREE.TextureLoader();
+const side = P.get('cull') ? THREE.FrontSide : THREE.DoubleSide;
+for (const file of P.get('m').split(',')) {
+  const groups = await (await fetch(file + '?' + Date.now())).json();
+  for (const g of groups) {
+    const pos = new Float32Array(b64(g.pos)); const n = pos.length / 9;
+    const col = new Float32Array(pos.length);
+    for (let i = 0; i < n; i++) {
+      const o = i * 9; const a = new THREE.Vector3(pos[o], pos[o + 1], pos[o + 2]), b = new THREE.Vector3(pos[o + 3], pos[o + 4], pos[o + 5]), c = new THREE.Vector3(pos[o + 6], pos[o + 7], pos[o + 8]);
+      const nn = b.clone().sub(a).cross(c.clone().sub(a)).normalize();
+      let s = 0.55 + 0.45 * Math.abs(nn.dot(SUN)); if (!g.f) s = 0.35 + 0.65 * Math.abs(nn.dot(SUN));
+      const k = g.f ? 1 : (g.grey || 0.85); const cc = Math.pow(s * k, 2.2);
+      for (let j = 0; j < 9; j++) col[o + j] = cc;
+      if (g.diag) { col[o] = col[o + 3] = col[o + 6] = cc; col[o + 1] = col[o + 4] = col[o + 7] = 0; }
+    }
+    const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    let mat;
+    if (g.f) {
+      geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(b64(g.uv)), 2));
+      const t = await loader.loadAsync('tex/' + g.f + '.png'); t.colorSpace = THREE.SRGBColorSpace; t.wrapS = t.wrapT = THREE.RepeatWrapping; t.flipY = false;
+      mat = new THREE.MeshBasicMaterial({ map: t, vertexColors: true, side });
+    } else mat = P.get('bf') ? new THREE.ShaderMaterial({ vertexShader: 'varying vec3 vc; void main(){ vc = color; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }', fragmentShader: 'varying vec3 vc; void main(){ gl_FragColor = gl_FrontFacing ? vec4(pow(vc, vec3(1.0/2.2)),1.0) : vec4(1.0,0.0,0.0,1.0); }', vertexColors: true, side: THREE.DoubleSide }) : new THREE.MeshBasicMaterial({ vertexColors: true, side });
+    scene.add(new THREE.Mesh(geo, mat));
+  }
+}
+renderer.render(scene, camera); window.DONE = true;
+</script></body></html>
