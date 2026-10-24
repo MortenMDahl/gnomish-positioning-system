@@ -98,7 +98,10 @@ local function Decode(u, lvl)
 		page[k] = N(1)
 		local o = (k - 1) * 8
 		for j = 1, nc * 2 do uv[o + j] = N(2) / 4095 end
-		tris[k] = { a = i1, b = i2, c = i3, d = i4, bucket = -1, frame = 1, shown = false }
+		local mx, my -- (its middle, for the renderer's order by horizontal distance; GPS3D.lua's draw loop)
+		if i4 then mx, my = (vx[i1] + vx[i2] + vx[i3] + vx[i4]) / 4, (vy[i1] + vy[i2] + vy[i3] + vy[i4]) / 4
+		else mx, my = (vx[i1] + vx[i2] + vx[i3]) / 3, (vy[i1] + vy[i2] + vy[i3]) / 3 end
+		tris[k] = { a = i1, b = i2, c = i3, d = i4, bucket = -1, frame = 1, shown = false, mx = mx, my = my }
 	end
 	local m = { detail = true, poc = true, map = S.city.map, vx = vx, vy = vy, vh = vh, px = {}, py = {}, pd = {}, tris = tris, ready = false, page = page, uv = uv, lvl = lvl, last = 0, path = u.path }
 	for k = 1, nf do tris[k].mesh = m end
@@ -135,7 +138,7 @@ local function Release(m)
 end
 local function Forget(u)
 	for l = 0, 4 do local m = u.mesh[l]; if m then HideMesh(m); Release(m); u.mesh[l] = nil end end
-	u.lvl = nil
+	u.lvl, u.want = nil, nil
 end
 function S.SetEnabled(on)
 	if not on and S.city then for _, u in ipairs(S.city.units) do Forget(u) end; for _, b in ipairs(S.city.blocks) do Forget(b) end end
@@ -250,9 +253,13 @@ function S.Frame(active, n, frameNo)
 			local on, px = InView(u)
 			if on then
 				local want = fixed and min(max(fixed, C.minLevel or 0), 3) or LevelAt(px)
-				if not fixed and u.lvl and u.lvl <= 3 and want ~= u.lvl then -- (a change only once past the threshold by HYST)
-					if LevelAt(want < u.lvl and px / S.HYST or px * S.HYST) == u.lvl then want = u.lvl end
+				-- (a change only once past the threshold by HYST; against the level wanted last, not the one drawn:
+				-- a unit drawn at a coarser level while its level waited to be decoded must not keep it)
+				local last = u.want
+				if not fixed and last and last <= 3 and want ~= last then
+					if LevelAt(want < last and px / S.HYST or px * S.HYST) == last then want = last end
 				end
+				u.want = want
 				use = Draw(u, want, st)
 			end
 		end
@@ -293,7 +300,7 @@ function S.Command(arg)
 	if cmd == "on" or cmd == "off" then S.SetEnabled(cmd == "on")
 	elseif cmd == "level" then
 		local v = tonumber(rest)
-		if S.city then for _, u in ipairs(S.city.units) do u.lvl = nil end end
+		if S.city then for _, u in ipairs(S.city.units) do u.lvl, u.want = nil, nil end end
 		Store("shellsLevel", v and max(S.city and S.city.minLevel or 0, min(4, floor(v))) or nil)
 	elseif cmd == "px" then
 		local a, b, c, d = rest:match("^(%S+)%s+(%S+)%s+(%S+)%s*(%S*)$")

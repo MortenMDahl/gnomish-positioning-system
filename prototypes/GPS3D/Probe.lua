@@ -16,6 +16,10 @@
 --      pixels every frame (frame time against none), then all eight shifted as the camera glides,
 --      with a red cross and your arrow drawn fresh for the moved camera: they should stay on the ground,
 --      and the real redraw at the end should not jump.
+--      Then (since 2026-10-24) the one-call move: the cost of moving a texture whole by one call against its four
+--      SetVertexOffset (the idea of 2026-10-24 for textures whose four corners moved alike): up to MOVE_N shown
+--      textures, each frame for 2 s: nothing, their four corners resent (+-0.3 px), one SetPoint each (+-0.3 px),
+--      one AdjustPointsOffset each (+-0.3 px); per 1,000 calls in ms, and whether a 0.3 px SetPoint moved GetCenter.
 --   5. OffScreenFrame: made or not, its methods, TakeSnapshot on a small test frame (nothing shown).
 -- Each part runs under pcall (one failing does not stop the others; a missing API is reported as
 -- "missing"); the settings, the camera and every anchor are put back at the end, on /gps3d probe stop,
@@ -29,7 +33,8 @@ local floor, max, min, abs, sin, cos, pi, sqrt = math.floor, math.max, math.min,
 local P = {
 	SETTINGS = { { 800, 0 }, { 3200, 0 }, { 6400, 0 }, { 3200, 2000 }, { 3200, 4000 }, { 3200, 8000 } }, -- ground, buildings
 	-- seconds: settling after a change (until no building block is waiting), each phase, the pictures
-	T = { settle = 0.6, settleMax = 3, still = 2, redraw = 2, turn = 2.5, picture = 10, base = 2, shiftOne = 2, glide = 3, hold = 1.5 },
+	T = { settle = 0.6, settleMax = 3, still = 2, redraw = 2, turn = 2.5, picture = 10, base = 2, shiftOne = 2, glide = 3, hold = 1.5, move = 2 },
+	MOVE_N = 2000, -- textures moved a frame in part 4's one-call move (since 2026-10-24)
 	scale = 1,     -- (the tests shorten every duration)
 	TURN = 20,     -- degrees a second, turning by itself
 	DROP = 3,      -- first frames of a phase not timed (the change itself)
@@ -544,6 +549,78 @@ local function Part4Report()
 		p4.moved and ("%.2f"):format(p4.moved) or "?")
 end
 
+-- Part 4, the one-call move (2026-10-24) ----------------------------------------------------------
+-- Is moving a texture whole by one call (SetPoint, or AdjustPointsOffset) cheaper than its four SetVertexOffset?
+-- Decision rule (testing/2026-10-24-poc-shells/NEXT.md): worth it if one move costs under 3 SetVertexOffset.
+local mv = {}
+P.mv = mv
+local function MoveStart()
+	wipe(mv)
+	local vis, n = ns.stats.visible or {}, min(P.MOVE_N, ns.stats.shown or 0)
+	mv.tris, mv.n, mv.sign = {}, 0, 1
+	for i = 1, n do
+		local t = vis[i]
+		if t and t.tex and t.x1 and t.x2 and t.x3 then mv.n = mv.n + 1; mv.tris[mv.n] = t end
+	end
+	mv.adjust = mv.n > 0 and Has(mv.tris[1].tex, "AdjustPointsOffset")
+	-- does a 0.3 px SetPoint move the texture by 0.3 (or does the client snap it to whole pixels)?
+	local t = mv.tris[1]
+	if t then
+		local x0 = t.tex:GetCenter()
+		t.tex:SetPoint("CENTER", ns.canvas, "CENTER", 0.3, 0)
+		local x1 = t.tex:GetCenter()
+		t.tex:SetPoint("CENTER", ns.canvas, "CENTER", 0, 0)
+		mv.moved = x0 and x1 and (x1 - x0) or nil
+	end
+	mv.base = NewPhase("base")
+end
+local function MoveFrame(kind)
+	return function(elapsed)
+		local ph = mv[kind]
+		if not ph then return true end
+		mv.sign = -mv.sign
+		local d, canvas = 0.3 * mv.sign, ns.canvas
+		local tris = mv.tris
+		if kind == "corners" then
+			for i = 1, mv.n do
+				local t = tris[i]
+				local tex = t.tex
+				tex:SetVertexOffset(1, t.x1 + 0.5 + d, t.y1 - 0.5) -- (as GPS3D.lua sends them: 3 upper right, 4 lower right,
+				tex:SetVertexOffset(2, t.x2 + 0.5 + d, t.y2 + 0.5) -- a triangle's 4 pinned onto its 3)
+				tex:SetVertexOffset(3, t.x3 - 0.5 + d, t.y3 - 0.5)
+				tex:SetVertexOffset(4, (t.x4 or t.x3) - 0.5 + d, (t.y4 or t.y3) + 0.5)
+			end
+		elseif kind == "setpoint" then
+			for i = 1, mv.n do tris[i].tex:SetPoint("CENTER", canvas, "CENTER", d, 0) end
+		end
+		PhaseFrame(ph, elapsed, nil, false)
+	end
+end
+local function MoveEnd(kind)
+	return function()
+		local ph = mv[kind]
+		if ph and ph.frames > 0 then PhaseEnd(ph) end
+		-- put back: anchored at the canvas's centre, every corner sent again by the next Render
+		for i = 1, mv.n do
+			local t = mv.tris[i]
+			t.tex:SetPoint("CENTER", ns.canvas, "CENTER", 0, 0)
+			t.x1, t.x2, t.x3, t.x4 = nil, nil, nil, nil
+		end
+		pcall(ns.Render)
+	end
+end
+local function MoveReport()
+	local b = mv.base and mv.base.med
+	local function per(ph, calls)
+		if not (b and ph and ph.med and calls > 0) then return "n/a" end
+		return ("%.3f ms (frame %.1f)"):format((ph.med - b) / calls * 1000, ph.med)
+	end
+	local n = mv.n or 0
+	Say("4/5 one-call move: %d textures; frame %.1f ms moving none; per 1,000 calls: SetVertexOffset %s, SetPoint %s, AdjustPointsOffset %s; a 0.3 px SetPoint moved GetCenter by %s",
+		n, b or 0, per(mv.corners, 4 * n), per(mv.setpoint, n), mv.adjust and per(mv.adjust_ph, n) or "missing",
+		mv.moved and ("%.2f"):format(mv.moved) or "?")
+end
+
 -- Part 5 ----------------------------------------------------------------------------------------
 local OFF_METHODS = { "TakeSnapshot", "ApplySnapshot", "IsSnapshotValid", "GetMaxSnapshots", "SetMaxSnapshots", "Flush", "UsesNPOT" }
 local function Part5()
@@ -643,7 +720,25 @@ local function Plan()
 	end, function() if p4.one and p4.one.frames > 0 then PhaseEnd(p4.one) end end)
 	Step(4, nil, Part4GlideStart, Part4GlideFrame, function() if p4.glide and p4.glide.frames > 0 then PhaseEnd(p4.glide) end end)
 	Step(4, P.T.hold, nil, function() return p4.skip end, Part4Report)
-	cleanups[4] = function() Unanchor(); if P.cross then P.cross:Hide() end end
+	Step(4, P.T.move, MoveStart, function(elapsed) PhaseFrame(mv.base, elapsed, nil, false) end, function() if mv.base.frames > 0 then PhaseEnd(mv.base) end end)
+	Step(4, P.T.move, function() mv.corners = NewPhase("corners") end, MoveFrame("corners"), MoveEnd("corners"))
+	Step(4, P.T.move, function() mv.setpoint = NewPhase("setpoint") end, MoveFrame("setpoint"), MoveEnd("setpoint"))
+	Step(4, P.T.move, function() if mv.adjust then mv.adjust_ph = NewPhase("adjust") end end, function(elapsed)
+		if not mv.adjust_ph then return true end
+		mv.sign = -mv.sign
+		local d = 0.3 * mv.sign
+		for i = 1, mv.n do mv.tris[i].tex:AdjustPointsOffset(d, 0) end
+		PhaseFrame(mv.adjust_ph, elapsed, nil, false)
+	end, function()
+		if mv.adjust_ph and mv.adjust_ph.frames > 0 then PhaseEnd(mv.adjust_ph) end
+		for i = 1, mv.n or 0 do local tex = mv.tris[i].tex; if Has(tex, "ClearPointsOffset") then pcall(tex.ClearPointsOffset, tex) end end
+		MoveEnd("adjust_ph")()
+		MoveReport()
+	end)
+	cleanups[4] = function()
+		Unanchor(); if P.cross then P.cross:Hide() end
+		for i = 1, mv.n or 0 do local t = mv.tris[i]; t.tex:SetPoint("CENTER", ns.canvas, "CENTER", 0, 0); t.x1, t.x2, t.x3, t.x4 = nil, nil, nil, nil end
+	end
 	-- 5
 	Step(5, 0, Part5)
 end

@@ -534,7 +534,7 @@ function textureFor(key) {
   else if (norm.startsWith("interface\\addons\\gps3d\\globe\\")) loadImage("globe/" + norm.split("\\").pop() + ".png", { mip: true, repeat: false }, done());
   else if (key.startsWith("fdid:") && POC_TEX.has(Number(key.slice(5)))) loadImage("poctex/" + key.slice(5) + ".png", { mip: true, repeat: true }, done());
   // (proof of concept S1, branch poc-shells: the building shells' baked pages, GPS3D_City_<name>\Shells\L<level>_<page>; JPEG copies here)
-  else if (/^interface\\addons\\gps3d_city_[a-z]+\\shells\\/.test(norm)) loadImage("shells/" + norm.split("\\").pop().toUpperCase() + ".jpg", { mip: true, repeat: false }, done());
+  else if (/^interface\\addons\\gps3d_city_[a-z]+\\shells\\/.test(norm)) loadImage("shells/" + norm.split("\\").pop().replace(/\.(jpg|blp|tga)$/, "").toUpperCase() + ".jpg", { mip: true, repeat: false }, done());
   else if (key.startsWith("fdid:")) {
     const info = fdidInfo.get(Number(key.slice(5)));
     const name = info && `${info.map}_${info.x}_${info.y}`;

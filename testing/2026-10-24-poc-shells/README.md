@@ -21,6 +21,11 @@ shell is always drawn whole (nothing see-through); the detail lives in the pictu
 - `tools/sandbox/`: `perf_shells.py`, `order_shells.py` (draw-order check), `scn_shells.py` (page shots),
   `smoke_shells.py`; `index.src.html` loads `shells/*.jpg`.
 
+## Next
+
+`NEXT.md`: what to do after the in-game test (getting the shells into the game, what `/gps3d probe stormwind` must
+answer and what each answer decides, the speed-ups in order, what was measured negative), written 2026-10-24.
+
 ## Making the data (scripts here; inputs from the poc-models export, see testing/2026-10-22-poc-models)
 
 `sh_prep.py` (the visible game triangles per unit) -> `sh_all3.sh`: for each level `sh_build3.py` (the district as one

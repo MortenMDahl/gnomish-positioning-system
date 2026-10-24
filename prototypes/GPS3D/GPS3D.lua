@@ -2003,8 +2003,8 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 	-- cull, sort into buckets and draw: one pass over the triangles
 	-- (proof of concept S1, Shells.lua: building shells drawn above the ground in buckets of their own, ordered by
 	-- their faces' horizontal distance from the camera, log-spaced; the ground keeps the first sr.ground buckets)
-	local sr, tb, skl, sks = ns.shellRange, TOTAL_BUCKETS, nil, nil
-	if sr and sr.on then tb = sr.ground; skl = math.log(sr.kmin); sks = (TOTAL_BUCKETS - tb - 0.001) / max(math.log(sr.kmax) - skl, 1e-6) end
+	local sr, tb, skl, sks, skmin, log = ns.shellRange, TOTAL_BUCKETS, nil, nil, 1, math.log
+	if sr and sr.on then tb = sr.ground; skmin = sr.kmin; skl = log(skmin); sks = (TOTAL_BUCKETS - tb - 0.001) / max(log(sr.kmax) - skl, 1e-6) end
 	local scale = (tb - 0.001) / max(dmax - dmin, 1e-6)
 	stats.dmin, stats.dmax = dmin, dmax
 	do local w, h = canvas:GetSize(); clipW, clipH = w / 2 + 2, h / 2 + 2 end
@@ -2082,12 +2082,15 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 				end
 				local bucket
 				if skl and mesh.hk then
-					local vx_, vy_ = mesh.vx, mesh.vy
-					local mx, my
-					if q4 then mx, my = (vx_[a] + vx_[b] + vx_[c] + vx_[q4]) / 4 - cx, (vy_[a] + vy_[b] + vy_[c] + vy_[q4]) / 4 - cy
-					else mx, my = (vx_[a] + vx_[b] + vx_[c]) / 3 - cx, (vy_[a] + vy_[b] + vy_[c]) / 3 - cy end
+					local mx, my = t.mx, t.my -- (the face's middle, worked out when Shells.lua decoded it)
+					if mx then mx, my = mx - cx, my - cy
+					else
+						local vx_, vy_ = mesh.vx, mesh.vy
+						if q4 then mx, my = (vx_[a] + vx_[b] + vx_[c] + vx_[q4]) / 4 - cx, (vy_[a] + vy_[b] + vy_[c] + vy_[q4]) / 4 - cy
+						else mx, my = (vx_[a] + vx_[b] + vx_[c]) / 3 - cx, (vy_[a] + vy_[b] + vy_[c]) / 3 - cy end
+					end
 					local k = sqrt(mx * mx + my * my)
-					bucket = TOTAL_BUCKETS - 1 - floor((math.log(k > sr.kmin and k or sr.kmin) - skl) * sks)
+					bucket = TOTAL_BUCKETS - 1 - floor((log(k > skmin and k or skmin) - skl) * sks)
 					if bucket < tb then bucket = tb elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
 				else
 					bucket = floor((dmax - depth) * scale)

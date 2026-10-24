@@ -289,6 +289,7 @@ while P.running:
         for i in range(1, int(st.shown) + 1):
             t = vis[i]
             if t.x1 is None: continue
+            if t.mesh is not None and t.mesh.hk: continue  # (the ground's: a city shell may change level at the moved camera, its old faces hidden)
             d = (t.x1 - p4.sx0) ** 2 + (t.y1 - p4.sy0) ** 2
             if best is None or d < best[0]: best = (d, t, t.x1, t.y1)
         track = best
@@ -321,6 +322,8 @@ else:
     jump = 99
 check('the glide\'s last shifted frame and the real redraw after it agree near the cross (nothing jumps)', jump <= 0.6, f'{jump:.2f} px at the vertex nearest the cross')
 check('part 4 reports frame times with and without the shift, no error', '4/5 SetPointsOffset: no error' in text, next((l.split('|r ')[-1][:200] for l in CHAT if '4/5 SetPointsOffset' in l), ''))
+mv_line = next((l.split('|r ')[-1] for l in CHAT if '4/5 one-call move' in l), '')
+check('part 4 one-call move (2026-10-24): corners, SetPoint and AdjustPointsOffset timed per 1,000 calls, a 0.3 px SetPoint kept (not snapped)', 'per 1,000 calls: SetVertexOffset' in mv_line and 'SetPoint 0.' in mv_line and 'moved GetCenter by 0.30' in mv_line and int(mv_line.split(':')[1].split()[0]) > 0, mv_line[:220])
 check('part 3: RotateTextures(0.5) called on the turned frame', list(G.PROBE_LOG.rot.values()) == [0.5] and '3/5 RotateTextures: called' in text)
 check('part 5: the OffScreenFrame\'s methods listed, a snapshot taken and applied, the frame shown only for that call',
       '5/5 OffScreenFrame: made; methods there: TakeSnapshot ApplySnapshot IsSnapshotValid GetMaxSnapshots SetMaxSnapshots Flush UsesNPOT; missing: none; TakeSnapshot hidden -> 7, shown -> 7; ApplySnapshot -> true' in text

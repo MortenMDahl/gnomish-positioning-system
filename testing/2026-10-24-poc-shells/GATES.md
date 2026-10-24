@@ -55,3 +55,22 @@ Magnification = screen px per picture px along the picture's most stretched axis
   EVIDENCE: order_shells.py wrong 0.01 / 0.10 / 0.20 / 0.10 % (near / close / high / far); smoke_shells.py all views drawn, 0 waiting; `level 0` clamps to level 1 (243 units at level 1); coverage from above at level 1: 267 yd2 missing (0.2 %, level 0 had 360), 5,166 yd2 extra (level 0: 2,879: buildings slightly fatter); page load: only the CDN / Google Fonts requests fail (blocked here, as before)
 - [ ] S1b-G7: committed and pushed to poc-shells (MortenMDahl), sandbox artifact updated, README/GATES in testing/ updated
   EVIDENCE: pending
+
+# S1c: notes for after the in-game test, no-brainer speed-ups, sandbox up to date (2026-10-24)
+
+Request: "Take detailed notes of the things that should be done after we test in-game, and do the no-brainer stuff
+now. After that, make sure the sandbox is up to date so I can check it out myself". No-brainer = no change to what
+is drawn, no game needed to know it is right, measurable in the sandbox.
+
+- [x] S1c-G1: detailed notes: testing/2026-10-24-poc-shells/NEXT.md (getting shells into the game, what the probe must answer and the decision rules, speed-ups 2.1-2.3 with where / gain / risks / tests, ship blockers, measured negatives, done this round)
+- [x] S1c-G2: shell face middles at decode, `math.log` / `sr.kmin` once per frame
+  EVIDENCE: with level hysteresis held at 1, every shell face's bucket and corners identical old vs new over 35 snapshots (83,828 faces; 5 views + turn / zoom / pan paths); Render close 6.4, 6.3, 6.4 -> 6.1, 6.1, 6.0 ms, near 7.7, 7.2, 7.7 -> 7.2, 7.3, 7.1, others within noise
+- [x] S1c-G2b (found on the way): level hysteresis against the level wanted last (`u.want`), so a decode-budget fallback no longer sticks; deterministic run to run (two runs identical)
+- ABANDON S1c-G3: Shells.lua block cull + Tidy over live units: S.Frame 0.85-0.95 -> 0.98-1.15 ms (+15 %, 3 runs alternating); reverted, listed in NEXT.md as measured negative
+- ABANDON S1c-G4: cutting 4-corner faces at the near plane: the 5-corner case needs a design (NEXT.md 2.1); nothing reaches the canvas today (0 of 287-354 crossing quads at 45 / 25 / 15 yd), so it is no quality fix now, only a prerequisite of 2.1
+- [x] S1c-G5: /gps3d probe part 4 one-call move (SetVertexOffset / SetPoint / AdjustPointsOffset per 1,000 calls, snapping)
+  EVIDENCE: test_probe.py 35 of 35 (new check passes; the glide check, failing on this branch since the shells at 35 px and passing with shells off, now tracks a ground vertex)
+- [x] S1c-G6: nothing else changed
+  EVIDENCE: page shots closeup / near / close pixel-identical to before (max difference 0), also after the .jpg path change; perf_shells calls: closeup 16,631 -> 16,639, near 13,160 -> 13,146 (both from the hysteresis fix's level choice; identical with hysteresis held), close / high / far identical; test_luac 3 of 3; test_world 58 of 62 (the 4 known "blocks 0" failures); smoke_shells 4 views, 0 waiting; order_shells wrong 0.01 / 0.10 / 0.20 / 0.10 %
+- [ ] S1c-G7: committed + pushed (poc-shells, MortenMDahl), JPEG pages on Morten's PC, sandbox artifact republished and loading the new files
+  EVIDENCE: pending

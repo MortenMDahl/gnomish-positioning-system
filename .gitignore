@@ -21,3 +21,6 @@ tools/sandbox/perf/minimap_extra.zip.bak
 # Python caches
 __pycache__/
 *.pyc
+
+# the city shells' picture pages (24 MB of JPEG, made by testing/2026-10-24-poc-shells/sh_tolua.py; copied by hand for the game test)
+prototypes/GPS3D_City_Stormwind/Shells/
