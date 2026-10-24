@@ -102,5 +102,5 @@ some dual textures".
 - [x] S1d-G8: no ghost of the buildings on the ground
   CHECK: run_page.py shellslook at the gate (3 views) and in the district (3 views), `/gps3d shells floor off` (minimap) against on
   EVIDENCE: shots/cmp_gateA/B/C.png, cmp_near/close/canal.png viewed: the blurred white copy of the gate's towers and bridge on the water and the blue roof smears between the houses are gone with the floor picture; the picture: 2,048 px over 548 yd (3.74 px/yd), low streets 19 %, refilled under buildings / raised streets 40 %, raised streets 6.6 %
-- [ ] S1d-G7: committed + pushed (poc-shells, MortenMDahl), pages on Morten's PC, sandbox republished
-  EVIDENCE: pending
+- [x] S1d-G7: committed + pushed (poc-shells, MortenMDahl), pages on Morten's PC, sandbox republished
+  EVIDENCE: poc-shells 3ff836d on GitHub (git ls-remote = local HEAD); 45 S*.jpg pages + Floor.jpg written to prototypes/GPS3D_City_Stormwind/Shells on Morten's PC; sandbox artifact versions 15-16: 45 S pages + FLOOR.jpg, L pages removed, Shells_Stormwind.lua 8,699,731 bytes, GPS3D.lua 157,484 bytes (= local)
