@@ -150,7 +150,7 @@ textures are still visible through the ground, and also there appears to still b
   - Corners more than 1 yd under the drawn ground lifted, pictures cut (cmp_o0_clamp / o270_clamp: the hanging walls gone).
   - Cut walls with one colour left out: 427 / 508 / 238 / 317 / 105 / 121 / 47 / 64 / 26 faces in sets 1-9.
   - The gate's outside half from the whole-block shells.
-- [ ] G9: nothing broken; committed, pushed, sandbox republished
+- [x] G9: nothing broken; committed, pushed, sandbox republished
   EVIDENCE:
   - test_luac 3/3; test_probe 35/35; test_world 58/62 (the 4 known).
   - test_terrain 3/5: the 2 known failures, also failing with the data before S1d.
@@ -159,4 +159,5 @@ textures are still visible through the ground, and also there appears to still b
   - smoke_shells: 4 views drawn, 0 waiting.
   - order_shells wrong 0.06 / 0.17 / 0.26 / 0.16 %.
   - order_all: shell over nearer real ground 0-0.16 %, ground over nearer shell 0-0.49 % (far view, with the whole-block shells now drawn round Stormwind).
-  - Commit, push and artifact: see the report.
+  - poc-shells d572423 on GitHub (git ls-remote equals local HEAD). The 14 T*.jpg pages are in prototypes/GPS3D_Shells0/1/Shells on Morten's PC.
+  - Sandbox artifact version 17: Shells.lua, the city data, the two new data addons and 14 pages.
