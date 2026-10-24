@@ -1,12 +1,12 @@
 # (proof of concept S1, building shells) Render's Lua ms per frame at Stormwind, fresh game per setting (as
 # perf_poc7.py): median of 40 frames turning 1 degree a frame and 10 standing still (redrawn anyway); textures shown,
 # shell faces drawn, C calls a frame. Settings: shells (old blocks off), blocks (the old jagged blocks, shells off),
-# none (ground only); views near 90 yd, close 200, high 420, far 2,000.
+# none (ground only); views closeup 45 yd (since 2026-10-24), near 90 yd, close 200, high 420, far 2,000.
 import os, sys, json, statistics
 os.environ['NO_MUTANTS'] = '1'; sys.argv = [os.path.abspath('test_minimap.py')]
 src = open('test_minimap.py').read(); src = src[:src.index('results = []')]
 __file__ = os.path.abspath('test_minimap.py'); exec(compile(src, __file__, 'exec'))
-VIEWS = {'near': (16380, -25920, 90, 25, 40), 'close': (16426, -25896, 200, 25, 45), 'high': (16400, -25880, 420, 25, 62), 'far': (16426, -25896, 2000, 25, 50)}
+VIEWS = {'closeup': (16380, -25920, 45, 25, 40), 'near': (16380, -25920, 90, 25, 40), 'close': (16426, -25896, 200, 25, 45), 'high': (16400, -25880, 420, 25, 62), 'far': (16426, -25896, 2000, 25, 50)}
 TH = float(os.environ.get('TH', '0')) or None   # (orbit height: the ground under the view unless given; the shots use 117.5, the streets)
 VARS = os.environ.get('VARS', 'shells,blocks').split(',')
 views = os.environ.get('VIEWSEL', ','.join(VIEWS)).split(',')

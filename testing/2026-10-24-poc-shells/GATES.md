@@ -29,3 +29,29 @@ All numbers: the sandbox (Lua 5.4 under lupa, the call-counting harness of perf_
   EVIDENCE: shells_s1_sandbox.png (viewed; sent). Z-buffer renders of every level against the game's own models: scratchpad shtv_*_pair.png (viewed)
 - [x] G8: kill criteria evaluated; committed and pushed; the sandbox artifact runs it
   EVIDENCE: in the report and README.md; commit and artifact version in the report
+
+# S1b: sharper near buildings (shells S1) + performance (2026-10-24)
+
+Request: "make the near buildings sharper and evaluate performance". Sandbox only (the game is down).
+Magnification = screen px per picture px along the picture's most stretched axis (1 = as sharp as the screen).
+
+- [x] S1b-G1: baseline sharpness measured at the views (closeup 45, near 90, close 200, high 420, far 2,000 yd)
+  CHECK: sharp_shells.py (PPY=3,2,2,1,0.75 PX="14 7 4.5 1.2", the data before)
+  EVIDENCE: building pixels, median magnification / share over 3x: closeup 6.84 / 99.3 %, near 4.45 / 95.5 %, close 3.29 / 61.2 %, high 1.68 / 0 %, far 0.46 / 0 %
+- [x] S1b-G2: near buildings sharper
+  CHECK: sharp_shells.py on variant E (no level 0; 5 / 4 / 2.5 / 0.75 px a yard; PX 14 10 5.5 1.2)
+  EXPECT: near and close: median at most half of baseline, share over 3x at most half
+  EVIDENCE: closeup 4.05 / 71.1 %, near 1.94 / 8.7 % (half of 4.45 = 2.23; half of 95.5 % = 47.8 %), close 1.36 / 0.0 % (half of 3.29 = 1.65), high 0.67 / 0 %, far 0.46 / 0 %. Closeup (45 yd) improves less and is still soft.
+- [x] S1b-G3: performance (Render's Lua ms turning, median of 40 frames, 3 runs alternating; C calls a frame)
+  CHECK: TH=117.5 perf_shells.py, base data with PX 14 7 4.5 against E
+  EXPECT: close under 12 ms; no view over 1.25x baseline
+  EVIDENCE: closeup base 14.9, 16.1 ms / 24,275 calls -> E 8.8, 8.8 / 16,631; near 11.2, 9.7, 9.9 / 17,836 -> 7.9, 7.9, 7.0 / 13,160; close 6.5, 6.8, 6.8 / 12,556 -> 6.8, 7.1, 6.3 / 12,138; high 14.1, 14.5, 12.8 / 25,062 -> 13.2, 13.0, 11.7 / 25,060; far 12.5, 11.6, 9.9 / 20,218 -> 9.5, 9.1, 8.8 / 20,218 (same calls: same work, ms noise of this machine about +-15 %)
+- [x] S1b-G4: data and texture memory
+  CHECK: sh_bakeprep / sh_tolua output; pages referenced per view (sharp_shells.py)
+  EVIDENCE: pictures 37.4 -> 66.4 M px used, pages 12 -> 20 (2,048^2), DXT1+mips estimate 33.6 -> 56 MB (no BLP made), sandbox JPEG 15.2 -> 23.9 MB; Lua data 4,403,010 -> 2,065,254 bytes (no level-0 strings). Pages a view draws from: closeup 11 -> 15, near 10 -> 11, close 3 -> 2, high 2 -> 3, far 1 -> 1. Other variants (estimates, sh_dataest.py + sharp_shells.py): densities x1.5 keeping level 0: 61.5 MB, near 2.97; x2 keeping level 0: 95 MB, near 2.22
+- [x] S1b-G5: shots before / after at 45, 90, 200 yd, viewed
+  EVIDENCE: /mnt/user-data/outputs/shells_sharper_before_after.png, shots/sharp_crop_near.png (viewed: roof tiles, stone courses and windows visible after, a smear before)
+- [x] S1b-G6: nothing broken
+  EVIDENCE: order_shells.py wrong 0.01 / 0.10 / 0.20 / 0.10 % (near / close / high / far); smoke_shells.py all views drawn, 0 waiting; `level 0` clamps to level 1 (243 units at level 1); coverage from above at level 1: 267 yd2 missing (0.2 %, level 0 had 360), 5,166 yd2 extra (level 0: 2,879: buildings slightly fatter); page load: only the CDN / Google Fonts requests fail (blocked here, as before)
+- [ ] S1b-G7: committed and pushed to poc-shells (MortenMDahl), sandbox artifact updated, README/GATES in testing/ updated
+  EVIDENCE: pending

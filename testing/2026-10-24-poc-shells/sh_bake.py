@@ -1,9 +1,9 @@
-# Runs sh_bake.html over the pages of sh_bake_<lod>.json; writes shb_<lod>_<page>.png (raw, alpha 0 where empty).
+# Runs sh_bake.html over the pages of sh_bake_<VAR><lod>.json; writes shb_<VAR><lod>_<page>.png (raw, alpha 0 where empty).
 import asyncio, json, sys, threading, http.server, socketserver, functools, os, base64, time
 from playwright.async_api import async_playwright
 HERE = os.path.dirname(os.path.abspath(__file__))
-L = sys.argv[1]
-B = json.load(open(f'sh_bake_{L}.json'))
+L = sys.argv[1]; VAR = os.environ.get('VAR', '')
+B = json.load(open(f'sh_bake_{VAR}{L}.json'))
 def serve():
     socketserver.TCPServer.allow_reuse_address = True
     class Q(http.server.SimpleHTTPRequestHandler):
@@ -19,7 +19,7 @@ async def main():
         t0 = time.time(); nu = await pg.evaluate(f'initBake({B["page"]})'); print('units loaded', nu, round(time.time() - t0, 1), 's', flush=True)
         for i, jobs in enumerate(B['pages']):
             url, missing = await pg.evaluate('(j) => bakePage(j)', jobs)
-            open(f'shb_{L}_{i}.png', 'wb').write(base64.b64decode(url.split(',')[1]))
+            open(f'shb_{VAR}{L}_{i}.png', 'wb').write(base64.b64decode(url.split(',')[1]))
             print('page', i, len(jobs), 'pictures, missing units', missing, round(time.time() - t0, 1), 's', flush=True)
         await b.close()
 asyncio.run(main())

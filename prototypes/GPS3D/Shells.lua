@@ -18,7 +18,8 @@ local _, ns = ...
 local S = {}
 ns.shells = S
 S.LOAD_NEAR, S.KEEP, S.FORGET, S.DECODE_MS = 600, 5, 30, 6
-S.PX, S.HYST = { 14, 7, 4.5 }, 1.15 -- pixels per yard on screen at a unit's near side: level 0 above PX[1], 1 above PX[2], 2 above PX[3], else 3
+S.PX, S.HYST = { 14, 10, 5.5 }, 1.15 -- pixels per yard on screen at a unit's near side: level 0 above PX[1], 1 above PX[2], 2 above PX[3], else 3
+-- (never finer than the data's minLevel: the city data of 2026-10-24 has no level 0, its picture budget went to levels 1-3)
 S.GROUND_BUCKETS = 256 -- with shells in view the ground keeps this many of the 1,024 depth buckets, the shells the rest
 S.BLOCK_PX = 1.2 -- a whole 66.7-yd block below this many pixels per yard at its near side: drawn as one (level 4)
 S.CITIES = { -- (cities with shell data: addon, name in ns.ShellData, map, box: west, east, south, north edge yd)
@@ -43,6 +44,7 @@ local function Setup(c)
 	local d = ns.ShellData and ns.ShellData[c.name]
 	if not d then return end
 	S.city = S.city or { units = {}, map = d.map, boxes = {} }
+	S.city.minLevel = d.minLevel or 0 -- (finer levels are empty strings in the data)
 	local units = S.city.units
 	local blocks, b0 = S.city.blocks or {}, #(S.city.blocks or {})
 	S.city.blocks = blocks
@@ -154,7 +156,11 @@ ns.PocCovers = function(x, y)
 	return pocCovers and pocCovers(x, y) or false
 end
 
-local function LevelAt(p) local t = S.PX; return p > t[1] and 0 or (p > t[2] and 1 or (p > t[3] and 2 or 3)) end
+local function LevelAt(p)
+	local t, mn = S.PX, S.city and S.city.minLevel or 0
+	local l = p > t[1] and 0 or (p > t[2] and 1 or (p > t[3] and 2 or 3))
+	return l < mn and mn or l
+end
 local driver = CreateFrame("Frame")
 driver:Hide()
 driver:SetScript("OnUpdate", function(self) self:Hide(); if S.city then ns.Redraw() end end)
@@ -243,7 +249,7 @@ function S.Frame(active, n, frameNo)
 		if not (u.block and u.block.whole) then
 			local on, px = InView(u)
 			if on then
-				local want = fixed and min(fixed, 3) or LevelAt(px)
+				local want = fixed and min(max(fixed, C.minLevel or 0), 3) or LevelAt(px)
 				if not fixed and u.lvl and u.lvl <= 3 and want ~= u.lvl then -- (a change only once past the threshold by HYST)
 					if LevelAt(want < u.lvl and px / S.HYST or px * S.HYST) == u.lvl then want = u.lvl end
 				end
@@ -288,7 +294,7 @@ function S.Command(arg)
 	elseif cmd == "level" then
 		local v = tonumber(rest)
 		if S.city then for _, u in ipairs(S.city.units) do u.lvl = nil end end
-		Store("shellsLevel", v and max(0, min(4, floor(v))) or nil)
+		Store("shellsLevel", v and max(S.city and S.city.minLevel or 0, min(4, floor(v))) or nil)
 	elseif cmd == "px" then
 		local a, b, c, d = rest:match("^(%S+)%s+(%S+)%s+(%S+)%s*(%S*)$")
 		if tonumber(a) and tonumber(b) and tonumber(c) then S.PX = { tonumber(a), tonumber(b), tonumber(c) }; S.BLOCK_PX = tonumber(d) or S.BLOCK_PX; if ns.Redraw then ns.Redraw() end end

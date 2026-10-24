@@ -1,13 +1,13 @@
 # Fills the empty pixels (alpha 0) of every baked picture from the nearest painted pixel of the same picture; a
 # picture with nothing painted takes its unit's average colour. Writes the final pages shells/L<lod>_<page>.png (RGB).
-# Usage: python3 sh_fill.py <lod> <out dir>
+# Usage: [VAR=<variant>] python3 sh_fill.py <lod> <out dir>
 import sys, os, pickle, numpy as np
 from PIL import Image
 from scipy import ndimage
-L, OUT = sys.argv[1], sys.argv[2]
+L, OUT = sys.argv[1], sys.argv[2]; VAR = os.environ.get('VAR', '')
 os.makedirs(OUT, exist_ok=True)
-S = pickle.load(open(f'sh_faces_{L}.pkl', 'rb')); pics = S['pics']
-pages = [np.asarray(Image.open(f'shb_{L}_{i}.png').convert('RGBA')).copy() for i in range(S['npages'])]
+S = pickle.load(open(f'sh_faces_{VAR}{L}.pkl', 'rb')); pics = S['pics']
+pages = [np.asarray(Image.open(f'shb_{VAR}{L}_{i}.png').convert('RGBA')).copy() for i in range(S['npages'])]
 PAD = 2
 unit_col = {}
 for p in pics:   # a unit's average colour over its painted pixels
