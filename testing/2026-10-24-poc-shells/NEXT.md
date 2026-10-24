@@ -182,3 +182,10 @@ Also look, with your own eyes, at the shells at 45, 90, 200 and 420 yd, still an
   - the two new data addons load (`/gps3d test` lists them);
   - the old blocks give way without flicker where the shells are drawn;
   - the frame time at a capital seen from 800-2,000 yd with the new ladder (the budget slider trades it).
+
+## Tried on 2026-10-24 (S1f; sandbox): Orgrimmar, both options
+
+- Option 1 (only the buildings of Orgrimmar's model) and option 2 (an underside and a lower layer under overhangs)
+  were both built, shown and measured (`ORG_OPTIONS.md`, shots `tools/sandbox/shots/org3_*.png`).
+- Both look worse than the old blocks, so Orgrimmar stays on the old blocks.
+- Next for Orgrimmar: the capital-city pipeline (as for Stormwind), with option 2's lower layer.

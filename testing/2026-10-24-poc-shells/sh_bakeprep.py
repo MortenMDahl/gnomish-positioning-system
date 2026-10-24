@@ -11,7 +11,7 @@
 import sys, os, json, pickle, numpy as np
 L = int(sys.argv[1]); PPY = float(sys.argv[2]); VAR = os.environ.get('VAR', ''); PACK = os.environ.get('PACK', ''); OWN = os.environ.get('OWN', '1') == '1'
 PAGE, PAD = 2048, 2
-SLAB = {'wall': (3.0, 5.0), 'roof': (15.0, 3.0)}   # yd in front of (outside) / behind the face
+SLAB = {'wall': (3.0, 5.0), 'roof': (15.0, 3.0), 'under': (2.0, 8.0)}   # ('under': an overhang's underside, S1f)   # yd in front of (outside) / behind the face
 R = pickle.load(open(f'sh_shells_{L}.pkl', 'rb')); F = np.load(f'sh_vis_{L}.npz')['front']
 d = np.load('sh_in.npz')
 if not os.path.exists('sh_geo.bin') or os.environ.get('REGEO'):
@@ -58,10 +58,10 @@ for U in R:
         else:
             key = f['reg']
             if key not in reg_pic:
-                reg_pic[key] = len(pics); pics.append(dict(unit=U['unit'], kind='roof', pts=[], faces=[], nacc=np.zeros(3)))
+                reg_pic[key] = len(pics); pics.append(dict(unit=U['unit'], kind='under' if f['kind'] == 'under' else 'roof', pts=[], faces=[], nacc=np.zeros(3)))
             p = pics[reg_pic[key]]; p['pts'].append(c); p['faces'].append(len(faces))
             nn = np.cross(c[1] - c[0], c[2] - c[0]); p['nacc'] += nn
-            faces.append(dict(unit=U['unit'], kind='roof', c=c, pic=reg_pic[key]))
+            faces.append(dict(unit=U['unit'], kind=f['kind'] if f['kind'] == 'under' else 'roof', c=c, pic=reg_pic[key]))
     for key, pi in reg_pic.items():
         p = pics[pi]; n = p['nacc'] / np.linalg.norm(p['nacc'])
         u = np.array([np.cos(th), np.sin(th), 0.0]); u -= n * (u @ n)

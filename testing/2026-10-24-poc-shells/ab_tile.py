@@ -14,7 +14,14 @@ TILE = 1600 / 3
 SQUARE = (0, 16426.667 - 260, 16426.667 + 260, -25896.533 - 260, -25896.533 + 260)   # (map, x0, x1, y0, y1): the Trade District export square (raw/stormwind.json, +-R), which has its own finer shells
 # building models left to the old simplified blocks: Orgrimmar's city model (its cliffs overhang the streets, and a
 # 2.5D shell, the highest surface over each spot, roofs the city over with rock, grey where nothing was baked)
-SKIP_WMO = {7964229}
+SKIP_WMO = {int(v) for v in os.environ.get('SKIP_WMO', '7964229').split(',') if v}
+# (S1f, option 1) parts of a building model left out by texture: OPTION1="<model fdid>:<tex>,<tex>,...", e.g. Orgrimmar's
+# cliffs and canyon floor (7964229: textures 0, 8250846, 8250845, 8253979), so only its buildings get shells
+DROP_TEX = {}
+for spec in [v for v in os.environ.get('OPTION1', '').split(';') if v]:
+    m_, t_ = spec.split(':'); DROP_TEX[int(m_)] = {int(v) for v in t_.split(',')}
+LAYERS = int(os.environ.get('LAYERS', '1'))   # (S1f, option 2) 2: a second layer of shells under every overhang
+TEX0_FILL = os.environ.get('TEX0_FILL', '0') == '1'   # (S1f) used by both option runs; off by default (the shipped S1e data had it off)
 key = f'{M}_{TX}_{TY}'
 W = os.path.join(ROOT, key); os.makedirs(W, exist_ok=True)
 T0 = time.time()
@@ -28,7 +35,16 @@ while o < len(buf):
     idx = np.frombuffer(buf, np.uint32, nt * 3, o).reshape(nt, 3); o += nt * 12
     tx = np.frombuffer(buf, np.uint32, nt, o); o += nt * 4
     if fdid in SKIP_WMO: continue
-    P.append(pos[idx]); UV.append(uv[idx]); FD.append(tx)
+    keep_t = np.ones(nt, bool)
+    if fdid in DROP_TEX: keep_t = ~np.isin(tx, list(DROP_TEX[fdid]))
+    t3 = pos[idx]
+    # (S1f) triangles with no texture (a material the reader gives none: 40 % of Orgrimmar's model, baked grey) take
+    # the model's texture with the most area in this tile
+    tx = tx.copy()
+    if TEX0_FILL and (tx == 0).any() and (tx != 0).any():
+        ar = np.linalg.norm(np.cross(t3[:, 1] - t3[:, 0], t3[:, 2] - t3[:, 0]), axis=1)
+        nzm = tx != 0; ids, inv = np.unique(tx[nzm], return_inverse=True); tx[tx == 0] = ids[np.bincount(inv, weights=ar[nzm]).argmax()]
+    P.append(t3[keep_t]); UV.append(uv[idx][keep_t]); FD.append(tx[keep_t])
 if not P: print(json.dumps(dict(tile=key, empty=True, skipped_models=True))); sys.exit(0)
 tri, uv, fd = np.concatenate(P).astype(float), np.concatenate(UV).astype(float), np.concatenate(FD).astype(np.int64)
 # the ground grid round the tile (3 x 3 tiles, missing ones at the lowest height seen)
@@ -86,6 +102,50 @@ def run(*a, env=None):
 out = run(os.path.join(HERE, 'sh_build3.py'), '4'); log(step='build', out=json.loads(out))
 import pickle
 R = pickle.load(open(os.path.join(W, 'sh_shells_4.pkl'), 'rb'))
+if LAYERS == 2:
+    import shapely
+    from shapely import vectorized
+    # every region that stands clear of the ground (a floating region, or one whose base is more than LIFT yd over the
+    # ground there): an underside (its polygon at its base, facing down), and the triangles under it make a lower layer
+    LIFT = 3.0
+    raised = []
+    for U in R:
+        for ri, r in enumerate(U['regions']):
+            c = r['poly'].representative_point()
+            if r['base'] > float(ground(c.x, c.y)) + LIFT:
+                raised.append(r)
+                for t in shapely.constrained_delaunay_triangles(r['poly']).geoms:
+                    cs = np.asarray(shapely.orient_polygons(t).exterior.coords)[:-1][::-1]   # (clockwise from above: faces down)
+                    U['faces'].append(dict(kind='under', reg=('u', ri), c=np.array([(x, y, r['base']) for x, y in cs])))
+    pickle.dump(R, open(os.path.join(W, 'sh_shells_4.pkl'), 'wb'))
+    lower = np.zeros(len(tri), bool)
+    cen3 = tri.mean(1); top3 = tri[..., 2].max(1)
+    for r in raised:
+        inside_r = vectorized.contains(r['poly'], cen3[:, 0], cen3[:, 1])
+        lower |= inside_r & (top3 < r['base'] - 0.5)
+    log(step='layers', raised_regions=len(raised), lower_tris=int(lower.sum()))
+    if lower.sum() > 0:
+        WB = os.path.join(W, 'b'); os.makedirs(WB, exist_ok=True)
+        tb = tri[lower]; cb = tb.mean(1); bb = (np.floor(cb[:, 0] / BLK).astype(int) - 230) * 1000 + (np.floor(-cb[:, 1] / BLK).astype(int) - 300)
+        np.savez_compressed(os.path.join(WB, 'sh_in.npz'), tri=tb.astype(np.float32), uv=uv[lower].astype(np.float32), fd=fd[lower], both=np.ones(len(tb), np.int8),
+                            bld=(-2 - bb).astype(np.int64), street=np.zeros(len(tb), bool), piece=np.zeros(len(tb), np.int64))
+        shutil.copy(os.path.join(W, 'sw_ground.json'), WB)
+        rb = subprocess.run([sys.executable, os.path.join(HERE, 'sh_build3.py'), '4'], cwd=WB, capture_output=True, text=True)
+        if rb.returncode: print(rb.stderr[-2000:], file=sys.stderr); raise SystemExit('lower layer build failed')
+        RB = pickle.load(open(os.path.join(WB, 'sh_shells_4.pkl'), 'rb'))
+        nfb = sum(len(U['faces']) for U in RB)
+        log(step='lower layer', units=len(RB), faces=nfb)
+        if nfb:
+            np.savez(os.path.join(WB, 'sh_vis_4.npz'), front=np.ones(nfb, np.int32))
+            for f in ('sh_bake.html', 'three.module.min.js'): shutil.copy(os.path.join(HERE, f), WB)
+            if not os.path.exists(os.path.join(WB, 'tex')): os.symlink(os.environ.get('TEXPNG', '/home/claude/allb/texpng'), os.path.join(WB, 'tex'))
+            for a in (['sh_bakeprep.py', '4', '0.75'], ['sh_bake.py', '4'], ['sh_fill.py', '4', 'pages']):
+                rr = subprocess.run([sys.executable, os.path.join(HERE, a[0]), *a[1:]], cwd=WB, capture_output=True, text=True, env={**os.environ, 'REGEO': '1'})
+                if rr.returncode: print(rr.stderr[-2000:], file=sys.stderr); raise SystemExit(a[0] + ' failed (lower layer)')
+            for f in os.listdir(WB):
+                if f not in ('sh_faces_4.pkl', 'pages', 'sh_shells_4.pkl'):
+                    p_ = os.path.join(WB, f)
+                    if os.path.islink(p_) or os.path.isfile(p_): os.remove(p_)
 nf = sum(len(U['faces']) for U in R)
 if nf == 0: log(empty=True, step='build'); sys.exit(0)
 np.savez(os.path.join(W, 'sh_vis_4.npz'), front=np.ones(nf, np.int32))

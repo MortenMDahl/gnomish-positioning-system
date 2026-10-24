@@ -42,11 +42,12 @@ def level_string(fl, c, pw):
 summary = {}
 for M in MAPS:
     tiles = sorted(d for d in os.listdir(ROOT) if d.startswith(f'{M}_') and os.path.exists(os.path.join(ROOT, d, 'sh_faces_4.pkl')))
+    tiles += sorted(d + '/b' for d in os.listdir(ROOT) if d.startswith(f'{M}_') and os.path.exists(os.path.join(ROOT, d, 'b', 'sh_faces_4.pkl')))   # (S1f: lower layers)
     if not tiles: continue
     # every picture of every tile, with its pixels (padding included)
     pics = []; tdata = {}
     for k in tiles:
-        _, tx, ty = (int(v) for v in k.split('_'))
+        _, tx, ty = (int(v) for v in k.split('/')[0].split('_'))
         S = pickle.load(open(os.path.join(ROOT, k, 'sh_faces_4.pkl'), 'rb'))
         pages = [np.asarray(Image.open(os.path.join(ROOT, k, 'pages', f'L4_{i}.png')).convert('RGB')) for i in range(S['npages'])]
         base = len(pics)
@@ -103,9 +104,10 @@ for M in MAPS:
              'local T = {}',
              'ns.ShellTiles[%d] = { tiles = T, pages = %d, pw = %d, path = "Interface\\\\AddOns\\\\%s\\\\Shells\\\\T%%d_%%d.jpg" }' % (M, npages, pw, addon)]
     nblocks = nfaces = 0
+    tent = {}
     for k in tiles:
         S, base = tdata[k]
-        _, tx, ty = (int(v) for v in k.split('_'))
+        _, tx, ty = (int(v) for v in k.split('/')[0].split('_'))
         by_unit = {}
         for f in S['faces']:
             p = pics[base + f['pic']]
@@ -121,7 +123,9 @@ for M in MAPS:
             r = float(np.linalg.norm(P - c, axis=1).max())
             ents.append('{%.3f,%.3f,%.3f,%.1f,%d,%d,"%s"}' % (c[0], c[1], c[2], r, bx, by, level_string(fl, c, pw)))
             nblocks += 1; nfaces += len(fl)
-        lines.append('T[%d] = { %s }' % (ty * 64 + tx, ', '.join(ents)))
+        tent.setdefault(ty * 64 + tx, []).extend(ents)
+    for tk_, ents in sorted(tent.items()):
+        lines.append('T[%d] = { %s }' % (tk_, ', '.join(ents)))
     open(os.path.join(adir, f'Shells_{M}.lua'), 'w').write('\n'.join(lines) + '\n')
     open(os.path.join(adir, 'Link.lua'), 'w').write('-- Hands this data addon\'s namespace to GPS3D (OnDemand.lua): the files after it write into GPS3D\'s namespace.\nGPS3D_API.LinkData(select(2, ...))\n')
     name = {0: 'Eastern Kingdoms', 1: 'Kalimdor'}.get(M, f'map {M}')

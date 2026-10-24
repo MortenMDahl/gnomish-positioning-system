@@ -37,14 +37,15 @@ DUMP = '''function(ns)
   return table.concat(out, ";") .. "|" .. table.concat({cx,cy,cz,fx,fy,fz,rx,ry,ux,uy,uz, ns.Focal(), cw, ch}, ",")
 end'''
 res = {}
-for vk, (x, y, d, yaw, pitch, th) in VIEWS.items():
+for vk, vv in VIEWS.items():
+    x, y, d, yaw, pitch, th = vv[:6]; mp = vv[6] if len(vv) > 6 else 0  # (optional 7th: the map)
     g = Game(minimap=False); L, G, ns3 = g.L, g.G, g.ns3
     g.at(-8830, 640, 0, 0, 'x', ''); g.tick(2); G.SlashCmdList.GPS('3d'); g.tick(3)
     G.SlashCmdList.GPS3D('shells on')
     for c in os.environ.get('CMDS', '').split(';'):
         c = c.strip()
         if c.startswith('/gps3d '): G.SlashCmdList.GPS3D(c[7:])
-    L.eval('function(ns, x, y, d, yaw, pitch, th) ns.SetCamMode("free"); ns.SetTopDown(false, true); local c = ns.cam; c.map = 0; c.x, c.y, c.dist, c.yaw, c.pitch = x, y, d, yaw, pitch; c.th = th or ns.GroundHeight(x, y, 0); if ns.SnapLift then ns.SnapLift() end end')(ns3, x, y, d, yaw, pitch, th)
+    L.eval('function(ns, mp, x, y, d, yaw, pitch, th) ns.SetCamMode("free"); ns.SetTopDown(false, true); local c = ns.cam; c.map = mp; c.x, c.y, c.dist, c.yaw, c.pitch = x, y, d, yaw, pitch; c.th = th or ns.GroundHeight(x, y, mp); if ns.SnapLift then ns.SnapLift() end end')(ns3, mp, x, y, d, yaw, pitch, th)
     for _ in range(30): L.eval('function(ns) ns.Redraw() end')(ns3); g.tick(1)
     rows, camtxt = L.eval(DUMP)(ns3).split('|')
     cam = [float(v) for v in camtxt.split(',')]
