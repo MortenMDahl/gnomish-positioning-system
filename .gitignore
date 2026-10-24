@@ -24,3 +24,5 @@ __pycache__/
 
 # the city shells' picture pages (24 MB of JPEG, made by testing/2026-10-24-poc-shells/sh_tolua.py; copied by hand for the game test)
 prototypes/GPS3D_City_Stormwind/Shells/
+# the whole-block shells' picture pages (S1e: 14 pages, 14 MB of JPEG, made by testing/2026-10-24-poc-shells/ab_collect.py; copied by hand for the game test)
+prototypes/GPS3D_Shells*/Shells/

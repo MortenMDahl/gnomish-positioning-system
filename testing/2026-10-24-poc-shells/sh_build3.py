@@ -104,6 +104,8 @@ lab = lab.reshape(ny, nx)
 # number the components on cells that have a key 1..n
 used = np.unique(lab[have]); remap = np.zeros(ncomp, np.int64); remap[used] = np.arange(1, len(used) + 1)
 comp = np.where(have, remap[lab], 0); n = len(used)
+if n == 0:   # (all-buildings: nothing on top anywhere)
+    pickle.dump([], open(f'sh_shells_{L}.pkl', 'wb')); print(json.dumps({'lod': L, 'units': 0, 'faces': 0})); sys.exit(0)
 cinfo = [None] * (n + 1)
 flat_c = comp[have]; flat_k = key[have]; flat_o = own[have]
 first = np.zeros(n + 1, np.int64); first[flat_c] = flat_k

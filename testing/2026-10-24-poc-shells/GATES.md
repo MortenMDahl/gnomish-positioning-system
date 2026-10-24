@@ -104,3 +104,59 @@ some dual textures".
   EVIDENCE: shots/cmp_gateA/B/C.png, cmp_near/close/canal.png viewed: the blurred white copy of the gate's towers and bridge on the water and the blue roof smears between the houses are gone with the floor picture; the picture: 2,048 px over 548 yd (3.74 px/yd), low streets 19 %, refilled under buildings / raised streets 40 %, raised streets 6.6 %
 - [x] S1d-G7: committed + pushed (poc-shells, MortenMDahl), pages on Morten's PC, sandbox republished
   EVIDENCE: poc-shells 3ff836d on GitHub (git ls-remote = local HEAD); 45 S*.jpg pages + Floor.jpg written to prototypes/GPS3D_City_Stormwind/Shells on Morten's PC; sandbox artifact versions 15-16: 45 S pages + FLOOR.jpg, L pages removed, Shells_Stormwind.lua 8,699,731 bytes, GPS3D.lua 157,484 bytes (= local)
+
+# S1e: levels of detail recalculated with a Sonnet agent, every building in the game, the gate (2026-10-24)
+
+Requests: "recalculate the detail levels ... have a sonnet agent do it and sparr with it, id like to be able to see
+buildings from afar, and high details semi-close" / "Also can you add all buildings in the game as well?" / "Some
+textures are still visible through the ground, and also there appears to still be multiple gates here".
+
+- [x] L1: per-set cost and sharpness table
+  CHECK: perf_shells.py shells-l1..9 at 6 views (closeup 45, near 90, close 200, high 420, mid 800, far 2,000 yd); magnification F/(d*ppy), shape error shape*F/d with F = 695 px
+  EVIDENCE: e.g. far: set 1 132,015 calls / 44,037 faces, set 3 112,174 / 31,083, set 5 55,706 / 12,645, set 7-8 31,8xx / 5,501, set 9 19,095 / 1,806; sharp (mag 1) from 139 yd (sets 1, 3), 174 (5), 278 (7), 695 (8), 926 (9) (sets 1-5 timed while 6-9 ran: their ms inflated, calls exact)
+- [x] L2: Sonnet proposal, sparring, settled
+  EVIDENCE:
+  - Sonnet's first proposal: (0, 1), (55, 3), (200, 6), (450, 8), (2600, 9), plus a call budget sliding the ladder inward.
+  - My pushback: drop set 1 (data for little gain); semi-close needs set 5, not 6 (mag 1.7 at 200 yd was the old complaint); budget the shells' own faces; generous thresholds under a budget.
+  - Revised: (0, 3), (250, 5), (350, 6), (500, 8), (2600, 9); face budget 6,500 with bias steps of 1.08 up to 4; a step back only if the faces it predicts stay under 0.95 of the budget (its finding: a plain dead band limit-cycles at far, where all units sit at the same distance); hysteresis 1.3 to coarsen, none to refine.
+  - Mine after measuring: the prediction made hysteresis-aware (the first build let close reach 8,274 faces against 6,500); budget 6,000 (5,000 pushed the far view back to blocks, since set 8 needs 5,501 faces; 6,500 cost +43 % calls at close).
+- [x] L3: new defaults in place, measured. The excess over 1.25x is stated, and is the cost of the request.
+  CHECK: perf_shells.py, old ladder (budget 0) vs new, alternating x2, whole-block shells off
+  EVIDENCE:
+
+  | view | Lua ms, old (2 runs) | Lua ms, new (2 runs) | calls | units |
+  |---|---|---|---|---|
+  | closeup | 8.7, 9.1 | 10.7, 12.2 | 14,623 -> 17,067 (+17 %) | |
+  | near | 10.8, 12.0 | 12.9, 13.1 | 19,216 -> 21,716-21,935 (+13-14 %) | |
+  | close | 7.5, 8.0 | 12.3, 13.3 | 14,608 -> 20,477 (+40 %) | |
+  | high | 15.7, 15.8 | 17.6, 19.5 | 25,810 -> 29,400 (+14 %) | |
+  | mid | 10.0, 10.1 | 15.0, 18.9 | 21,478 -> 29,747 (+38 %) | 250 -> 763 |
+  | far | 9.9, 9.6 | 19.7, 20.3 | 18,787 -> 31,130 (+66 %) | 71 blocks -> 763 buildings |
+
+  - Sliders verified on the page in S1d (same rows), plus *Shells face budget* and *Whole-block shells budget*.
+- [x] B1: geometry of every tile with buildings exported on Morten's PC and in the cloud
+  EVIDENCE: scripts/export_tiles_node.ts in the Cowork VM: 58 s; 1,724 tiles visited, 799 with building triangles (362 EK + 437 Kalimdor), 3,783 placements, 2,816 textures; 1.2 GB raw, staged as 389 MB gzipped; all 799 unpacked in the cloud
+- [x] B2: block shells for every tile (phase 1), sizes stated
+  EVIDENCE: ab_tile.py over 799 tiles: 751 with shells, 45 nothing above the ground, 3 only Orgrimmar's model (left out); ab_collect.py: 6,743 blocks, 106,456 faces, Lua 2,337,354 + 2,274,558 bytes, 14 pages (6 + 8), JPEG 6,050,480 + 7,956,153 bytes (about 39 MB as DXT1)
+- [x] B3: the addon draws them on demand; the old blocks give way
+  EVIDENCE: Shells.lua TilesFrame / TilesWanted / PocCovers by 66.7-yd square; GPS3D_Shells0 / 1 load when the camera is within 2,500 yd of the ground on that map; page shots tiles on vs off; the gate's outer half and the grey cut wall are gone (cmp_gate_t.png)
+- [x] B4: checked at the Undercity ruins, Thunder Bluff, Goldshire, Orgrimmar, Ironforge, Stormwind's gate; perf
+  EVIDENCE:
+  - Shots cmp_uc_t / uctop / tb / tbtop / gold / iftop / orgtop_t2 / gate_t viewed.
+  - The Undercity: much better. Goldshire and Thunder Bluff: real buildings. Ironforge: one odd block. Orgrimmar: a mess (cliffs over the streets), so its model is left out (orgtop_t2 identical to before).
+  - Calls, shells and old blocks on (as the game starts) vs whole-block shells off: Undercity 26,699 -> 19,738, gate 19,026 -> 10,401, Goldshire 11,522 -> 10,173, Thunder Bluff 22,418 -> 14,732.
+- [x] B5 (Morten's screenshot): no walls through the ground; one gate
+  EVIDENCE:
+  - Corners more than 1 yd under the drawn ground lifted, pictures cut (cmp_o0_clamp / o270_clamp: the hanging walls gone).
+  - Cut walls with one colour left out: 427 / 508 / 238 / 317 / 105 / 121 / 47 / 64 / 26 faces in sets 1-9.
+  - The gate's outside half from the whole-block shells.
+- [ ] G9: nothing broken; committed, pushed, sandbox republished
+  EVIDENCE:
+  - test_luac 3/3; test_probe 35/35; test_world 58/62 (the 4 known).
+  - test_terrain 3/5: the 2 known failures, also failing with the data before S1d.
+  - test_ondemand 10/41: the same 10/41 with the Shells.lua before S1e (the poc branches draw the game's buildings by default, so its old-block checks see 0 blocks).
+  - test_settings and test_choice fail as before S1d.
+  - smoke_shells: 4 views drawn, 0 waiting.
+  - order_shells wrong 0.06 / 0.17 / 0.26 / 0.16 %.
+  - order_all: shell over nearer real ground 0-0.16 %, ground over nearer shell 0-0.49 % (far view, with the whole-block shells now drawn round Stormwind).
+  - Commit, push and artifact: see the report.

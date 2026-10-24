@@ -172,3 +172,13 @@ Also look, with your own eyes, at the shells at 45, 90, 200 and 420 yd, still an
 - `ALL_BUILDINGS.md`: what every building in the game would weigh and the order to build it.
 - In the game, check: the floor picture loads as `.jpg` like the pages; the ground at the square's edges (raised
   floor against unraised hills); the sliders' defaults against the frame time.
+
+## Done on 2026-10-24 (S1e; sandbox)
+
+- Levels of detail recalculated with a Sonnet agent (README), with a face budget and asymmetric hysteresis.
+- Shell corners under the drawn ground are lifted to 1 yd under it; the export cut's empty walls are gone.
+- Every building on both continents as whole-block shells (`ALL_BUILDINGS.md`, phase 1).
+- In the game, check:
+  - the two new data addons load (`/gps3d test` lists them);
+  - the old blocks give way without flicker where the shells are drawn;
+  - the frame time at a capital seen from 800-2,000 yd with the new ladder (the budget slider trades it).

@@ -85,6 +85,32 @@ Variants estimated: densities x1.5 / x2 keeping level 0: 61.5 / 95 MB, 90 yd at 
 - Cost: the city's floor is now drawn where it shows, more ground triangles near the camera (NEXT.md section 2.1
   would take them off again).
 
+## Levels of detail recalculated, every building, the gate (2026-10-24, `GATES.md` S1e)
+
+- **Levels** (sparred with a Sonnet agent, from measured per-set costs: perf_shells.py `shells-l1..9` at six views):
+  - The ladder: 0 yd set 3 (0.75-yd shape, 5 px/yd), 250 yd set 5 (1.5 yd, 4 px/yd), 350 yd set 6 (1.5 yd, 2 px/yd),
+    500 yd set 8 (3-yd shape, 1 px/yd), 2,600 yd set 9 (whole blocks). Every building is shown out to 2,600 yd.
+  - A face budget (6,000; slider *Shells face budget*, `/gps3d shells budget <n>`): when the units in view would draw
+    more faces, all distances are taken up to 4x longer, in steps of 1.08. A step back is taken only if the faces it
+    would draw are predicted, from the data's face counts, to stay under 0.95 of the budget.
+  - Hysteresis: 1.3x to go coarser, none to go finer.
+  - Cost against the old ladder (calls a frame, sandbox): +13 to +17 % near, +40 % at 200 yd, +38 % at 800 yd,
+    +66 % at 2,000 yd (individual buildings instead of blocks).
+- **The gate** (Morten's screenshot):
+  - A shell corner more than 1 yd under the drawn ground is lifted to that depth, and its picture is cut there
+    (Decode, `S.UNDER`). The towers' walls no longer hang over the fields.
+  - Walls along the Trade District's export cut that baked one colour are left out (`sh_tolua_sets.py`, 238 in
+    set 3).
+  - The rest of the gate comes from the whole-block shells (below), so the old blocks no longer draw it twice.
+- **Every building, whole-block shells** (phase 1 of `ALL_BUILDINGS.md`): `GPS3D_Shells0` and `GPS3D_Shells1`.
+  - 6,743 blocks on 751 tiles: 4.6 MB Lua and 14 pages (14 MB JPEG).
+  - Drawn within 1,500 yd, nearest first, up to 5,000 faces (slider *Whole-block shells budget*,
+    `/gps3d shells tiles <n>`); the old blocks give way where they are drawn.
+  - Fewer calls than the old blocks: -12 to -45 % at the Undercity, the gate, Goldshire and Thunder Bluff.
+  - Orgrimmar's city model is left out (overhanging cliffs).
+  - Pipeline: `scripts/export_tiles_node.ts` (on Morten's PC), then `ab_tile.py` per tile, then `ab_collect.py`.
+    `sh_bake.py` needs three.js r160 (`three.module.min.js`) next to `sh_bake.html`.
+
 ## Kill criteria (sandbox)
 
 | Criterion | Result |

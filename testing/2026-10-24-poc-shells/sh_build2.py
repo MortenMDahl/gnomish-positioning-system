@@ -48,6 +48,7 @@ _SF = None
 def street_floor(X, Y):
     """The highest street part over each 0.5-yd cell of the district (1e9 where there is none)."""
     global _SF
+    if not ST.any(): return np.full(np.shape(X), 1e9)   # (all-buildings tiles: no street layer)
     if _SF is None:
         ids = np.nonzero(ST)[0]; lo = TRI[ids].reshape(-1, 3).min(0) - 2; hi = TRI[ids].reshape(-1, 3).max(0) + 2
         nx, ny = int((hi[0] - lo[0]) / RES) + 1, int((hi[1] - lo[1]) / RES) + 1

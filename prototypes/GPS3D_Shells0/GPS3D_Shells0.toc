@@ -1,0 +1,10 @@
+## Interface: 16001
+## Title: GPS 3D data: Eastern Kingdoms, building shells
+## Notes: Every building of Eastern Kingdoms as whole-block shells with pictures of the real buildings (GPS 3D proof of concept). Loaded by GPS 3D when its 3D view is on Eastern Kingdoms with shells on (load on demand).
+## Version: 0.7.0
+## X-License: MIT
+## LoadOnDemand: 1
+## Dependencies: GPS3D
+
+Link.lua
+Shells_0.lua

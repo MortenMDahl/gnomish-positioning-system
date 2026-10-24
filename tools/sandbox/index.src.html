@@ -275,6 +275,8 @@ const ADDONS = [
   {"name": "GPS3D_Kalimdor2", "files": ["Link.lua", "Detail_1_2.lua"], "lod": true},
   {"name": "GPS3D_Kalimdor3", "files": ["Link.lua", "Detail_1_3.lua"], "lod": true},
   {"name": "GPS3D_Models", "files": ["Link.lua", "Models_0.lua", "Models_1.lua", "Models_30.lua", "Models_33.lua", "Models_36.lua", "Models_47.lua", "Models_169.lua", "Models_209.lua", "Models_289.lua", "Models_309.lua", "Models_329.lua", "Models_469.lua", "Models_489.lua", "Models_509.lua", "Models_529.lua", "Models_531.lua"], "lod": true},
+  {"name": "GPS3D_Shells0", "files": ["Link.lua", "Shells_0.lua"], "lod": true},
+  {"name": "GPS3D_Shells1", "files": ["Link.lua", "Shells_1.lua"], "lod": true},
 ];
 // ADDONS-END
 const STORE_KEY = "gps-sandbox-saved-v1";
@@ -534,7 +536,7 @@ function textureFor(key) {
   else if (norm.startsWith("interface\\addons\\gps3d\\globe\\")) loadImage("globe/" + norm.split("\\").pop() + ".png", { mip: true, repeat: false }, done());
   else if (key.startsWith("fdid:") && POC_TEX.has(Number(key.slice(5)))) loadImage("poctex/" + key.slice(5) + ".png", { mip: true, repeat: true }, done());
   // (proof of concept S1, branch poc-shells: the building shells' baked pages, GPS3D_City_<name>\Shells\L<level>_<page>; JPEG copies here)
-  else if (/^interface\\addons\\gps3d_city_[a-z]+\\shells\\/.test(norm)) loadImage("shells/" + norm.split("\\").pop().replace(/\.(jpg|blp|tga)$/, "").toUpperCase() + ".jpg", { mip: true, repeat: false }, done());
+  else if (/^interface\\addons\\gps3d_(city_[a-z]+|shells\d+)\\shells\\/.test(norm)) loadImage("shells/" + norm.split("\\").pop().replace(/\.(jpg|blp|tga)$/, "").toUpperCase() + ".jpg", { mip: true, repeat: false }, done());
   else if (key.startsWith("fdid:")) {
     const info = fdidInfo.get(Number(key.slice(5)));
     const name = info && `${info.map}_${info.x}_${info.y}`;

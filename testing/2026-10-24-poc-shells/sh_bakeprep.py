@@ -50,7 +50,9 @@ for U in R:
         c = f['c']
         if f['kind'] == 'wall':
             e = c[1] - c[0] if np.hypot(*(c[1] - c[0])[:2]) > 1e-6 else c[2] - c[1]
-            u = np.array([e[0], e[1], 0.0]); u /= np.linalg.norm(u); v = np.array([0, 0, 1.0]); n = np.cross(u, v)
+            u = np.array([e[0], e[1], 0.0])
+            if np.linalg.norm(u) < 1e-6: continue   # (all-buildings: a wall with no width)
+            u /= np.linalg.norm(u); v = np.array([0, 0, 1.0]); n = np.cross(u, v)
             pics.append(dict(unit=U['unit'], kind='wall', u=u, v=v, n=n, pts=[c], faces=[len(faces)]))
             faces.append(dict(unit=U['unit'], kind='wall', c=c, pic=len(pics) - 1))
         else:

@@ -21,20 +21,33 @@ local _, ns = ...
 local S = {}
 ns.shells = S
 S.LOAD_NEAR, S.KEEP, S.FORGET, S.DECODE_MS = 600, 5, 30, 6
-S.HYST = 1.15 -- a unit changes level only once its distance is past the threshold by this factor
+S.HYST = 1.3 -- (since S1e) a unit goes to a coarser level only once its distance is past the threshold by this factor; to a finer one at the threshold
+-- the face budget (S1e, 2026-10-24): when the units in view would draw more faces than this at their levels, every
+-- distance is taken BIAS times longer (all thresholds pulled in), BIAS in steps of BIAS_STEP up to BIAS_MAX; it steps
+-- back only when the faces one step back are predicted to stay within 0.95 of the budget (no limit cycle when many
+-- units sit at the same distance). Faces counted from the data (each set's string says its face count), so decoding
+-- lag does not matter. GPS3D_DB.shellsBudget; 0 = no budget.
+S.FACE_BUDGET, S.BIAS_STEP, S.BIAS_MAX = 6000, 1.08, 4
+S.UNDER = 1.0 -- (yd: how far a shell may reach below the drawn ground; Decode)
+S.bias = 1
 S.LEVELS = 5 -- levels of detail
 S.lod = nil -- { { start yd, set }, ... } in use (the data's defaults, or GPS3D_DB.shellsLod)
 S.CITIES = { -- (cities with shell data: addon, name in ns.ShellData, map, box: west, east, south, north edge yd)
 	{ addon = "GPS3D_City_Stormwind", name = "Stormwind", map = 0, box = { 16154, 16692, -26172, -25624 } },
 }
 if ns.dataState then
+	for _, a in ipairs({ "GPS3D_Shells0", "GPS3D_Shells1" }) do
+		local have = false
+		for _, n in ipairs(ns.dataState.names) do if n == a then have = true end end
+		if not have then table.insert(ns.dataState.names, a) end
+	end
 	for _, c in ipairs(S.CITIES) do
 		local have = false
 		for _, n in ipairs(ns.dataState.names) do if n == c.addon then have = true end end
 		if not have then table.insert(ns.dataState.names, c.addon) end
 	end
 end
-local sqrt, floor, min, max = math.sqrt, math.floor, math.min, math.max
+local sqrt, floor, min, max, abs = math.sqrt, math.floor, math.min, math.max, math.abs
 local function Setting(key, default) local v = GPS3D_DB and GPS3D_DB[key]; if v == nil then return default end return v end
 local function Store(key, v) GPS3D_DB = GPS3D_DB or {}; GPS3D_DB[key] = v; if ns.Redraw then ns.Redraw() end return v end
 function S.Enabled() return Setting("shells", true) end
@@ -63,6 +76,7 @@ local function Setup(c)
 		for k = 1, nb - 1 do s[k] = e[6 + k] end
 		units[#units + 1] = { x = e[1], y = e[2], h = e[3], r = e[4], s = s, mesh = {}, set = nil, last = 0, path = d.path, block = e[5] > 0 and blocks[b0 + e[5]] or nil, street = e[6] == 1 }
 	end
+	for _, u in ipairs(units) do local b = u.block; if b then b.nu = (b.nu or 0) + 1 end end
 	S.LoadLod()
 	S.city.boxes[#S.city.boxes + 1] = c.box
 	-- the ground grid's cells under the shells' tops (keys gy * 4096 + gx of 16.7-yd cells): GPS3D.lua sorts the ground
@@ -121,14 +135,43 @@ local function Decode(u, set)
 	local vx, vy, vh = {}, {}, {}
 	local ox, oy, oh = u.x, u.y, u.h
 	for k = 1, nv do vx[k], vy[k], vh[k] = (N(3) - 131072) / 32 + ox, (N(3) - 131072) / 32 + oy, (N(3) - 131072) / 32 + oh end
+	-- (S1e) corners more than UNDER yd below the ground the 3D view draws are lifted to that depth: a wall's foot
+	-- under the drawn ground can only show through it (the painter's order has no depth test), as the gate's towers
+	-- did over the fields outside Stormwind; the face's picture is cut there too (below)
+	local low, map, grid = nil, S.city.map, ns.GridHeight
+	if grid then
+		for k = 1, nv do
+			local g = grid(map, vx[k], vy[k])
+			if g and vh[k] < g - S.UNDER then low = low or {}; low[k] = vh[k]; vh[k] = g - S.UNDER end
+		end
+	end
 	local tris, page, uv = {}, {}, {}
 	for k = 1, nf do
 		local nc = N(1)
 		local i1, i2, i3 = N(w), N(w), N(w)
 		local i4 = nc == 4 and N(w) or nil
-		page[k] = N(1)
+		page[k] = N(u.pw or 1)
 		local o = (k - 1) * 8
 		for j = 1, nc * 2 do uv[o + j] = N(2) / 4095 end
+		if low then -- a lifted corner's picture point moves toward the corner above it in the face (same place, higher)
+			local ids = { i1, i2, i3, i4 }
+			for c = 1, nc do
+				local k0 = ids[c]
+				local h0 = low[k0]
+				if h0 then
+					for c2 = 1, nc do
+						local k2 = ids[c2]
+						local h2 = low[k2] or vh[k2]
+						if c2 ~= c and abs(vx[k2] - vx[k0]) < 0.05 and abs(vy[k2] - vy[k0]) < 0.05 and h2 > vh[k0] then
+							local f = (vh[k0] - h0) / (h2 - h0)
+							local a, b = o + c * 2 - 1, o + c2 * 2 - 1
+							uv[a], uv[a + 1] = uv[a] + (uv[b] - uv[a]) * f, uv[a + 1] + (uv[b + 1] - uv[a + 1]) * f
+							break
+						end
+					end
+				end
+			end
+		end
 		local mx, my -- (its middle, for the renderer's order by horizontal distance; GPS3D.lua's draw loop)
 		if i4 then mx, my = (vx[i1] + vx[i2] + vx[i3] + vx[i4]) / 4, (vy[i1] + vy[i2] + vy[i3] + vy[i4]) / 4
 		else mx, my = (vx[i1] + vx[i2] + vx[i3]) / 3, (vy[i1] + vy[i2] + vy[i3]) / 3 end
@@ -180,6 +223,9 @@ end
 local BLOCK = ns.BLOCK
 local pocCovers = ns.PocCovers
 ns.PocCovers = function(x, y)
+	local cov = S.covered -- (the squares whole-block shells drew last frame: TilesFrame)
+	local k = cov and cov[floor(x / BLOCK) * 1024 + floor(-y / BLOCK)]
+	if k and S.frameNo and k >= S.frameNo - 1 and S.Enabled() then return true end
 	local C = S.city
 	if C and C.map == ns.cam.map and S.Enabled() then
 		local bx, by = (floor(x / BLOCK) + 0.5) * BLOCK, -(floor(-y / BLOCK) + 0.5) * BLOCK
@@ -210,6 +256,7 @@ function S.LoadLod()
 end
 -- the level of detail at a distance (yd to the near side)
 local function LevelAt(d)
+	d = d * S.bias
 	local lod, l = S.lod, 1
 	for i = 2, #lod do if d >= lod[i][1] then l = i end end
 	return l
@@ -272,47 +319,79 @@ local function Tidy(u, use) -- hide the sets not drawn; give back what has been 
 	end
 	if not use and u.set and now - u.last > S.FORGET then Forget(u) end
 end
-local ST = { lv = { 0, 0, 0, 0, 0 }, sets = {} }
-function S.Frame(active, n, frameNo)
-	local C = S.city
-	now, frameNo_, act, nAct = GetTime(), frameNo, active, n
-	local units, blocks = C.units, C.blocks
-	if C.map ~= ns.cam.map then
-		SR.on = false
-		for _, u in ipairs(units) do for _, m in pairs(u.mesh) do HideMesh(m) end end
-		for _, u in ipairs(blocks) do for _, m in pairs(u.mesh) do HideMesh(m) end end
-		return n
+-- the units in view this frame and their distances (a unit in a whole block: the block's), for the face budget
+local inU, inD, nIn = {}, {}, 0
+local function FacesOf(u, set) -- a unit's face count in a set, from its string's header (cached)
+	local nf = u.nf
+	if not nf then nf = {}; u.nf = nf end
+	local v = nf[set]
+	if not v then
+		local s = u.s[set] or ""
+		v = #s >= 6 and (VAL[byte(s, 4)] * 64 + VAL[byte(s, 5)]) * 64 + VAL[byte(s, 6)] or 0
+		nf[set] = v
 	end
-	fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz = ns.CameraBasis()
-	F = ns.Focal()
-	w, h = ns.canvas:GetSize(); w, h = w / 2, h / 2
+	return v
+end
+-- the faces the units in view would draw with all distances times bias
+local function Predict(bias)
+	local C, lod = S.city, S.lod
+	local bs, keep, total = C.blockSet, S.bias, 0
+	S.bias = bias
+	local hyst = S.HYST
+	for i = 1, nIn do
+		local u = inU[i]
+		local d = inD[i]
+		local l, last = LevelAt(d), u.want
+		if last and l > last and LevelAt(d / hyst) == last then l = last end -- (as the frame keeps it: hysteresis)
+		if lod[l][2] == bs and u.block then total = total + FacesOf(u.block, bs) / (u.block.nu or 1)
+		else total = total + FacesOf(u, UnitSet(l)) end
+	end
+	S.bias = keep
+	return total
+end
+function S.Budget(n)
+	local budget = Setting("shellsBudget", S.FACE_BUDGET)
+	if not budget or budget <= 0 then S.bias = 1; return end
+	local b, step = S.bias, S.BIAS_STEP
+	if Predict(b) > budget and b * step <= S.BIAS_MAX + 1e-6 then S.bias = b * step
+	elseif b > 1 + 1e-6 then
+		local back = max(1, b / step)
+		if Predict(back) <= 0.95 * budget then S.bias = back end
+	end
+	if b ~= S.bias then driver:Show() end -- (another frame to settle)
+end
+local ST = { lv = { 0, 0, 0, 0, 0 }, sets = {} }
+local function HideAll(list) for _, u in ipairs(list) do for _, m in pairs(u.mesh) do HideMesh(m) end end end
+local function CityFrame(st)
+	local C = S.city
+	local units, blocks = C.units, C.blocks
 	local fixed = S.Level()
-	t0 = debugprofilestop()
-	SR.on, SR.kmin, SR.kmax = false, 1e9, 0
-	local st = ST
-	st.units, st.faces, st.waiting, st.decoded, st.blocks = 0, 0, 0, 0, 0
 	local lv = st.lv; lv[1], lv[2], lv[3], lv[4], lv[5] = 0, 0, 0, 0, 0
 	local sets = st.sets; for k in pairs(sets) do sets[k] = 0 end
 	local bs, lod, hyst = C.blockSet, S.lod, S.HYST
+	nIn = 0
 	-- blocks whose level's set is the block set are drawn whole (their units are not)
 	for _, b in ipairs(blocks) do
 		local on, d = InView(b)
 		local whole = false
 		if fixed then whole = fixed == bs and on
 		elseif on then
-			local l = LevelAt(b.whole and d * hyst or d) -- (a block already whole stays so until nearer by HYST)
+			local l = LevelAt(b.whole and d or d / hyst) -- (a block becomes whole once past the threshold by HYST; back at the threshold)
 			whole = lod[l][2] == bs
+			b.d = d
 		end
-		b.whole = whole
+		b.whole = whole; b.on = on
 		local use = whole and Draw(b, bs, st) or nil
 		if use then st.blocks = st.blocks + 1; lv[S.LEVELS] = lv[S.LEVELS] + 1 end
 		Tidy(b, use)
 	end
 	for _, u in ipairs(units) do
 		local use
-		if not (u.block and u.block.whole) then
+		if u.block and u.block.whole then nIn = nIn + 1; inU[nIn], inD[nIn] = u, u.block.d
+		else
 			local on, d = InView(u)
 			if on then
+				nIn = nIn + 1; inU[nIn], inD[nIn] = u, d
 				local set
 				if fixed then set = fixed < bs and fixed or UnitSet(S.LEVELS)
 				else
@@ -320,7 +399,7 @@ function S.Frame(active, n, frameNo)
 					-- (a change only once past the threshold by HYST; against the level wanted last, not the one drawn:
 					-- a unit drawn in a coarser set while its own waited to be decoded must not keep it)
 					local last = u.want
-					if last and want ~= last and LevelAt(want > last and d / hyst or d * hyst) == last then want = last end
+					if last and want > last and LevelAt(d / hyst) == last then want = last end
 					u.want = want
 					lv[want] = lv[want] + 1
 					set = UnitSet(want)
@@ -330,24 +409,120 @@ function S.Frame(active, n, frameNo)
 		end
 		Tidy(u, use)
 	end
+	if not fixed then S.Budget(nIn) end
+	st.bias = S.bias
+	st.lv1, st.lv2, st.lv3, st.lv4, st.lv5 = lv[1], lv[2], lv[3], lv[4], lv[5]
+end
+
+-- every building of the map as whole-block shells (phase 1 of ALL_BUILDINGS.md, S1e): data addons GPS3D_Shells<map>
+-- (ab_collect.py), loaded when the 3D view is on that map with shells on. Blocks within TILE_REACH yd of the camera
+-- and in view, nearest first, while their faces fit TILE_BUDGET; the old simplified blocks give way in the 66.7-yd
+-- squares drawn last frame (ns.PocCovers), so beyond the budget or the reach the old ones are still there.
+S.TILE_ADDONS = { [0] = "GPS3D_Shells0", [1] = "GPS3D_Shells1" }
+S.TILE_REACH, S.TILE_BUDGET = 1500, 5000
+local TILE = 1600 / 3
+local tileObjs, liveT, coveredT, cand = {}, {}, {}, {}
+local function TileList(D, map, key) -- a tile's block objects, made when first needed
+	local mt = tileObjs[map]
+	if not mt then mt = {}; tileObjs[map] = mt end
+	local l = mt[key]
+	if l == nil then
+		local src = D.tiles[key]
+		l = false
+		if src then
+			l = {}
+			for i, e in ipairs(src) do
+				l[i] = { x = e[1], y = e[2], h = e[3], r = e[4], key = e[5] * 1024 + e[6], s = { [map] = e[7] }, mesh = {}, last = 0, path = D.path, pw = D.pw, ts = map }
+			end
+		end
+		mt[key] = l
+	end
+	return l
+end
+function S.TilesWanted()
+	if not S.Enabled() then return false end
+	local map = ns.cam.map
+	local addon = S.TILE_ADDONS[map]
+	-- (loaded once the camera comes within reach of the ground it looks at: never for a far view or the planet)
+	if addon and not loaded[addon] and (ns.cam.dist or 1e9) < S.TILE_REACH + 1000 then
+		loaded[addon] = true
+		if ns.LoadDataAddon then ns.LoadDataAddon(addon, "the buildings' shells") end
+	end
+	return ns.ShellTiles ~= nil and ns.ShellTiles[map] ~= nil
+end
+local function bydist(a, b) return a.d < b.d end
+local function TilesFrame(st)
+	local map = ns.cam.map
+	local D = ns.ShellTiles and ns.ShellTiles[map]
+	local nc = 0
+	if D and S.Enabled() then
+		local R = S.TILE_REACH
+		for ty = floor((-cy - R) / TILE), floor((-cy + R) / TILE) do
+			for tx = floor((cx - R) / TILE), floor((cx + R) / TILE) do
+				local l = TileList(D, map, ty * 64 + tx)
+				if l then
+					for _, b in ipairs(l) do
+						local dx, dy, rr = b.x - cx, b.y - cy, R + b.r
+						if dx * dx + dy * dy < rr * rr then
+							local on, d = InView(b)
+							if on then nc = nc + 1; cand[nc] = b; b.d = d end
+						end
+					end
+				end
+			end
+		end
+	end
+	for i = nc + 1, #cand do cand[i] = nil end
+	if nc > 1 then table.sort(cand, bydist) end
+	local budget, used = Setting("shellsTiles", S.TILE_BUDGET) or 0, 0
+	for i = 1, nc do
+		local b = cand[i]
+		local f = FacesOf(b, b.ts)
+		if used + f <= budget then
+			local m = Draw(b, b.ts, st)
+			if m then used = used + f; b.drawn = frameNo_; coveredT[b.key] = frameNo_; liveT[b] = true; st.tiles = st.tiles + 1 end
+		end
+	end
+	for b in pairs(liveT) do
+		if b.drawn == frameNo_ then Tidy(b, b.mesh[b.ts])
+		else Tidy(b, nil); if not next(b.mesh) then liveT[b] = nil end end
+	end
+	st.tfaces = used
+end
+S.covered = coveredT -- (for tests)
+function S.Frame(active, n, frameNo)
+	local C = S.city
+	now, frameNo_, act, nAct = GetTime(), frameNo, active, n
+	S.frameNo = frameNo
+	fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz = ns.CameraBasis()
+	F = ns.Focal()
+	w, h = ns.canvas:GetSize(); w, h = w / 2, h / 2
+	t0 = debugprofilestop()
+	SR.on, SR.kmin, SR.kmax = false, 1e9, 0
+	local st = ST
+	st.units, st.faces, st.waiting, st.decoded, st.blocks, st.tiles = 0, 0, 0, 0, 0, 0
+	if C and C.map == ns.cam.map then CityFrame(st)
+	else
+		st.lv1, st.lv2, st.lv3, st.lv4, st.lv5, st.bias = 0, 0, 0, 0, 0, 1; S.bias = 1
+		if C then HideAll(C.units); HideAll(C.blocks) end
+	end
+	TilesFrame(st)
 	if st.waiting > 0 then driver:Show() end
 	SR.on = st.units > 0
 	if SR.kmax <= SR.kmin then SR.kmax = SR.kmin + 1 end
 	st.ms = debugprofilestop() - t0
-	st.lv1, st.lv2, st.lv3, st.lv4, st.lv5 = lv[1], lv[2], lv[3], lv[4], lv[5]
 	S.stats = st
 	return nAct
 end
 
 local prev = ns.ExtraMeshes
 ns.ExtraMeshes = function(active, n, frameNo)
-	if S.Wanted() then n = S.Frame(active, n, frameNo)
+	local cw, tw = S.Wanted(), S.TilesWanted()
+	if cw or tw then n = S.Frame(active, n, frameNo)
 	else
 		SR.on = false
-		if S.city then
-			for _, u in ipairs(S.city.units) do for _, m in pairs(u.mesh) do HideMesh(m) end end
-			for _, u in ipairs(S.city.blocks) do for _, m in pairs(u.mesh) do HideMesh(m) end end
-		end
+		if S.city then HideAll(S.city.units); HideAll(S.city.blocks) end
+		for b in pairs(liveT) do HideAll({ b }) end
 	end
 	if prev then n = prev(active, n, frameNo) end
 	return n
@@ -369,10 +544,10 @@ function S.LodText()
 end
 function S.Status()
 	if not S.Enabled() then return "shells off" end
-	if not S.city then return "shells on (no city data near the view yet)" end
+	if not S.city then local st = S.stats or {}; return ("shells on (no city data near the view yet); %d whole-block shells of the map drawn, %d faces"):format(st.tiles or 0, st.tfaces or 0) end
 	local st = S.stats or {}
-	return ("shells on: %d units, %d blocks; last frame %d drawn (%d / %d / %d / %d / %d at levels 1-5), %d faces, %d waiting; %s"):format(#S.city.units, #S.city.blocks, st.units or 0,
-		st.lv1 or 0, st.lv2 or 0, st.lv3 or 0, st.lv4 or 0, st.lv5 or 0, st.faces or 0, st.waiting or 0,
+	return ("shells on: %d units, %d blocks; last frame %d drawn (%d / %d / %d / %d / %d at levels 1-5; %d whole-block shells of the map, %d faces), %d faces, %d waiting; face budget %d, distances x%.2f; %s"):format(#S.city.units, #S.city.blocks, st.units or 0,
+		st.lv1 or 0, st.lv2 or 0, st.lv3 or 0, st.lv4 or 0, st.lv5 or 0, st.tiles or 0, st.tfaces or 0, st.faces or 0, st.waiting or 0, Setting("shellsBudget", S.FACE_BUDGET) or 0, S.bias,
 		S.Level() and ("always set " .. S.SetName(S.Level())) or ("levels: " .. S.LodText()))
 end
 -- one level's start (yd) and set; nil keeps that part (saved in GPS3D_DB.shellsLod)
@@ -400,6 +575,14 @@ function S.Command(arg)
 		local n = S.city and #S.city.sets or 9
 		if S.city then for _, u in ipairs(S.city.units) do u.set, u.want = nil, nil end end
 		Store("shellsSet", v and max(1, min(n, floor(v))) or nil)
+	elseif cmd == "budget" then -- (faces; 0: none)
+		local v = tonumber(rest)
+		if v then Store("shellsBudget", max(0, floor(v))) end
+		return ("Shells face budget %d (0: none)"):format(Setting("shellsBudget", S.FACE_BUDGET))
+	elseif cmd == "tiles" then -- (the whole-block shells' faces; 0: none drawn)
+		local v = tonumber(rest)
+		if v then Store("shellsTiles", max(0, floor(v))) end
+		return ("Whole-block shells: face budget %d, within %d yd"):format(Setting("shellsTiles", S.TILE_BUDGET), S.TILE_REACH)
 	elseif cmd == "floor" then -- (the city's floor picture under the shells, or the minimap's: to compare)
 		S.noFloorImg = rest == "off"
 		if ns.Redraw then ns.Redraw() end
@@ -427,7 +610,7 @@ if GPS3D_API and GPS3D_API.settings then
 		set = function(v) S.SetEnabled(v) end,
 	}
 	local SETS = 9 -- (the sliders' range; the sets of the data loaded, Stormwind's: 9)
-	local DEF = { { 0, 3 }, { 70, 5 }, { 125, 7 }, { 300, 7 }, { 580, 9 } } -- (the data's defaults, for the page before the data loads)
+	local DEF = { { 0, 3 }, { 250, 5 }, { 350, 6 }, { 500, 8 }, { 2600, 9 } } -- (the data's defaults, for the page before the data loads)
 	for i = 1, S.LEVELS do
 		if i > 1 then
 			list[#list + 1] = {
@@ -448,5 +631,21 @@ if GPS3D_API and GPS3D_API.settings then
 			set = function(v) S.SetLod(i, nil, v) end,
 		}
 	end
+	list[#list + 1] = {
+		kind = "slider", key = "GPS3D_ShellsBudget", name = "Shells face budget",
+		tooltip = "The most faces the shells may draw: with more buildings in view, every level begins nearer until they fit (up to 4 times nearer). 0: no limit (/gps3d shells budget <n>).",
+		default = S.FACE_BUDGET, min = 0, max = 20000, step = 250,
+		format = function(v) return v > 0 and ("%d faces"):format(v) or "no limit" end,
+		get = function() return Setting("shellsBudget", S.FACE_BUDGET) end,
+		set = function(v) Store("shellsBudget", v) end,
+	}
+	list[#list + 1] = {
+		kind = "slider", key = "GPS3D_ShellsTiles", name = "Whole-block shells budget",
+		tooltip = "Every other building of the map as 66.7-yard block shells with pictures: the most faces they may draw, nearest first (within 1,500 yards); further out the simple blocks stay. 0: none (/gps3d shells tiles <n>).",
+		default = S.TILE_BUDGET, min = 0, max = 20000, step = 250,
+		format = function(v) return v > 0 and ("%d faces"):format(v) or "none" end,
+		get = function() return Setting("shellsTiles", S.TILE_BUDGET) end,
+		set = function(v) Store("shellsTiles", v) end,
+	}
 	list[#list + 1] = { kind = "button", key = "GPS3D_ShellsReset", name = "Shells levels", text = "Defaults", tooltip = "The levels of detail as the city's data sets them (/gps3d shells lod reset).", click = function() S.ResetLod() end }
 end
