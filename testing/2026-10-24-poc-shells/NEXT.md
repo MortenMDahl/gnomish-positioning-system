@@ -21,10 +21,11 @@ Trade District): closeup 45 yd, near 90, close 200, high 420, far 2,000.
 
 1. Branch `poc-shells`. Copy `prototypes/GPS3D` and `prototypes/GPS3D_City_Stormwind` (with its `Shells` folder) to
    the game's AddOns folder, as AGENTS.md "Deploying and testing" says for the other GPS3D folders.
-2. `GPS3D_City_Stormwind\Shells\L<level>_<page>.jpg`: the 20 picture pages (24 MB). They are not in git
-   (`.gitignore`); they were copied into the repository folder on Morten's PC on 2026-10-24. To make them again:
-   `testing/2026-10-24-poc-shells/sh_all3.sh` (it writes them to `tools/sandbox/site/shells/`), then copy them into
-   `prototypes/GPS3D_City_Stormwind/Shells/`.
+2. `GPS3D_City_Stormwind\Shells\S<set>_<page>.jpg` (since S1d: 45 pages of the 9 sets, 51 MB) and `Floor.jpg`
+   (the city's floor picture, 1 MB). They are not in git (`.gitignore`); copied into the repository folder on
+   Morten's PC with each data change (the old `L<level>_<page>.jpg` pages are no longer used). To make them again:
+   `testing/2026-10-24-poc-shells/sh_sets.sh` (writes them to `tools/sandbox/site/shells/` and `Floor.jpg` to the
+   addon folder), then copy the pages into `prototypes/GPS3D_City_Stormwind/Shells/`.
 3. The data names the pages `.jpg`, the way GPS loads its overview images. If the self-test says the overview images
    do not load (JPEG refused by the client), the shells will be blank too: then the pages must become BLP (DXT1)
    or TGA, and `sh_tolua.py`'s path changes to that extension (see 3.1).
@@ -56,6 +57,11 @@ Also look, with your own eyes, at the shells at 45, 90, 200 and 420 yd, still an
 ## 2. Speed-ups, in order of gain for the effort
 
 ### 2.1 Do not draw the ground under the city's shells (needs no game; two prerequisites first)
+
+- Since S1d (2026-10-24) the ground under the city is raised to the buildings' floor and drawn round and under the
+  shells, so this gain is now larger: the floor costs closeup / near / close about +1,800 / +5,500 / +3,000 calls a
+  frame against the code before S1d (earlier alternating run, `GATES.md` S1d-G4). The cells wholly under shell tops
+  in every set: `sh_solidcells.py` (127 cells) — a start for the gap list.
 
 - Gain (sandbox, measured on a patched copy and re-run): closeup 17,489 -> 12,943 calls a frame (-26 %), the other
   views -1 to -2 % (the shells cover little of the ground there or it is not in view). Lua ms about the same (the
@@ -153,3 +159,16 @@ Also look, with your own eyes, at the shells at 45, 90, 200 and 420 yd, still an
   which made that check fail on this branch since the shells came (35 px, it passes with shells off).
 - The shells' data names its pages `.jpg` and the sandbox's loader accepts the extension, so the same data runs in
   the game (section 0).
+
+## Done on 2026-10-24 (S1d; sandbox)
+
+- The ground raised to the cities' floors (`scripts/build_city_floor.py`, all maps) and its levels of detail rebuilt
+  with the error under the shells weighted 0.15 (`scripts/build_terrain_lod.py`).
+- Everything, ground included, ordered by distance while shells are in view; the city's floor cells behind the shells
+  on them (no shells through mountains).
+- Five levels of detail by distance with sliders (*Shells level N from / detail*), nine baked sets to choose from.
+- The city's floor picture instead of the minimap's under and round the shells (no flat copy of the buildings on the
+  ground); `/gps3d shells floor off` to compare.
+- `ALL_BUILDINGS.md`: what every building in the game would weigh and the order to build it.
+- In the game, check: the floor picture loads as `.jpg` like the pages; the ground at the square's edges (raised
+  floor against unraised hills); the sliders' defaults against the frame time.

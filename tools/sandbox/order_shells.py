@@ -24,8 +24,8 @@ DUMP = '''function(ns)
       end
     end
   end
-  for _, u in ipairs(S.city.units) do uidx = uidx + 1; for l = 0, 4 do local m = u.mesh[l]; if m and not m.hidden then add(m, u) end end end
-  for _, u in ipairs(S.city.blocks) do uidx = uidx + 1; local m = u.mesh[4]; if m and not m.hidden then add(m, u) end end
+  for _, u in ipairs(S.city.units) do uidx = uidx + 1; for _, m in pairs(u.mesh) do if not m.hidden then add(m, u) end end end -- (meshes by baked set since 2026-10-24)
+  for _, u in ipairs(S.city.blocks) do uidx = uidx + 1; for _, m in pairs(u.mesh) do if not m.hidden then add(m, u) end end end
   local cw, ch = ns.canvas:GetSize()
   return table.concat(out, ";") .. "|" .. table.concat({cx,cy,cz,fx,fy,fz,rx,ry,ux,uy,uz, ns.Focal(), cw, ch}, ",")
 end'''
@@ -41,6 +41,7 @@ for vk, (x, y, d, yaw, pitch) in VIEWS.items():
     C = np.array(cam[0:3]); Fw = np.array(cam[3:6]); R = np.array([cam[6], cam[7], 0.0]); U = np.array(cam[8:11]); Fl = cam[11]
     faces = []; meta = []
     for r in rows.split(';'):
+        if not r: continue
         v = [float(a) for a in r.split(',')]; b = int(v[0]); ui, street, ud = int(v[1]), int(v[2]), v[3]; v = [v[0]] + v[4:]; k = (len(v) - 1) // 5
         sc = np.array([[v[1 + 5 * i], v[2 + 5 * i]] for i in range(k)]); wc = np.array([[v[3 + 5 * i], v[4 + 5 * i], v[5 + 5 * i]] for i in range(k)])
         poly = shapely.Polygon(sc)

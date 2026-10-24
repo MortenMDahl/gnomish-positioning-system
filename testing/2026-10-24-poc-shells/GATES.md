@@ -53,8 +53,8 @@ Magnification = screen px per picture px along the picture's most stretched axis
   EVIDENCE: /mnt/user-data/outputs/shells_sharper_before_after.png, shots/sharp_crop_near.png (viewed: roof tiles, stone courses and windows visible after, a smear before)
 - [x] S1b-G6: nothing broken
   EVIDENCE: order_shells.py wrong 0.01 / 0.10 / 0.20 / 0.10 % (near / close / high / far); smoke_shells.py all views drawn, 0 waiting; `level 0` clamps to level 1 (243 units at level 1); coverage from above at level 1: 267 yd2 missing (0.2 %, level 0 had 360), 5,166 yd2 extra (level 0: 2,879: buildings slightly fatter); page load: only the CDN / Google Fonts requests fail (blocked here, as before)
-- [ ] S1b-G7: committed and pushed to poc-shells (MortenMDahl), sandbox artifact updated, README/GATES in testing/ updated
-  EVIDENCE: pending
+- [x] S1b-G7: committed and pushed to poc-shells (MortenMDahl), sandbox artifact updated, README/GATES in testing/ updated
+  EVIDENCE: commit 5862150
 
 # S1c: notes for after the in-game test, no-brainer speed-ups, sandbox up to date (2026-10-24)
 
@@ -72,5 +72,35 @@ is drawn, no game needed to know it is right, measurable in the sandbox.
   EVIDENCE: test_probe.py 35 of 35 (new check passes; the glide check, failing on this branch since the shells at 35 px and passing with shells off, now tracks a ground vertex)
 - [x] S1c-G6: nothing else changed
   EVIDENCE: page shots closeup / near / close pixel-identical to before (max difference 0), also after the .jpg path change; perf_shells calls: closeup 16,631 -> 16,639, near 13,160 -> 13,146 (both from the hysteresis fix's level choice; identical with hysteresis held), close / high / far identical; test_luac 3 of 3; test_world 58 of 62 (the 4 known "blocks 0" failures); smoke_shells 4 views, 0 waiting; order_shells wrong 0.01 / 0.10 / 0.20 / 0.10 %
-- [ ] S1c-G7: committed + pushed (poc-shells, MortenMDahl), JPEG pages on Morten's PC, sandbox artifact republished and loading the new files
+- [x] S1c-G7: committed + pushed (poc-shells, MortenMDahl), JPEG pages on Morten's PC, sandbox artifact republished and loading the new files
+  EVIDENCE: commit 6aea0ba
+
+# S1d: the city's ground, shells vs mountains, five levels of detail, ghosts, all buildings (2026-10-24)
+
+Requests: "We do need to load the ground, or it looks like all the buildings are flying" (then: raise the ground's
+heights "the way we do to raise mountains") / "the high level can remain even if we are zoomed a bit more out ... 5
+levels of detail, with a range at which that detail shifts in, and how detailed it is at that level" / "the buildings
+are visible through mountains now" / "please add all buildings in the game, not just SW" / "There also appears to be
+some dual textures".
+
+- [x] S1d-G1: terrain in front of shells hides them
+  CHECK: tools/sandbox/order_all.py (per pixel: the nearest triangle, ground included, against the one drawn on top), FLOORCELLS=sh_floorcells.json
+  EVIDENCE: shell over nearer real ground 0.03-1.05 % of pixels before (5 views + 3 mountain views, first run this round) -> now near / close / sw_s / sw_low / far 0.0 / 0.0 / 0.0 / 0.0 / 0.003 %; ground over nearer shell 0.0 / 0.0 / 0.049 / 0.0 / 0.002 %; shell over shell 0.07 / 0.087 / 0.145 / 0.019 / 0.002 % (unchanged). The city's floor poking up through a shell and drawn behind it (intended) 0.25-2.1 %.
+- [x] S1d-G2: no flying: the ground raised to the buildings' floor
+  CHECK: scripts/build_city_floor.py (all maps), scripts/build_terrain_lod.py check, page shots before / after
+  EVIDENCE: map 0: 4,901 grid points raised in 207 tiles (mean 32.8 yd, at most 119.5: CAP 120); 15 maps' World_*.lua changed; build_terrain_lod check passes with the weights; shots of the square's south and south-east sides before / after viewed (canals and streets at the buildings' feet, no ground 40 yd below)
+- [x] S1d-G3: five levels with sliders, live, defaults restorable
+  CHECK: run_page.py shellsopts (the page's Options panel)
+  EVIDENCE: rows "Shells level 1 detail", "level 2-5 from / detail", "Shells levels [Defaults]" present; moving level 2 from to 250 yd and level 1 detail to set 1: LodText "1) from 0 yd: set 1 ... 2) from 250 yd ..." and the close view's units at level 1 0 -> 176; Defaults back to 0/3, 70/5, 125/7, 300/7, 580/9. Slider labels wrap under the slider in the sandbox (shots/shellsopts_crop.png)
+- [x] S1d-G4: performance measured
+  CHECK: perf_shells.py VARS=shells, 5 views
+  EVIDENCE: alternating run earlier this round, code before S1d -> S1d (same raised ground data): closeup 8.4, 9.3 -> 10.0, 9.8 ms / 16,639 -> 18,489 calls; near 7.2, 7.6 -> 10.9, 10.5 / 13,146 -> 18,654; close 6.4, 6.3 -> 7.7, 7.8 / 12,138 -> 15,184; high 13.1, 13.2 -> 15.2, 14.5 / 25,060 -> 26,165; far 9.6, 9.4 -> 9.1, 9.0 / 20,218 -> 18,948 (the floor ground now drawn). Final code and data, two runs: closeup 9.0, 8.9 / 14,223; near 12.3, 11.1 / 18,615; close 8.1, 8.1 / 14,698; high 17.5, 15.7 / 26,123; far 11.4, 9.6 / 19,095. (The closeup view's centre now sits on the raised floor, which puts its camera inside a building: not comparable with before. The floor picture adds no calls: closeup identical with it off.)
+- [x] S1d-G5: all buildings in the game: plan, sizes, what runs on Morten's PC
+  EVIDENCE: ALL_BUILDINGS.md (about 116 squares' worth of buildings, measured from the blocks' rasters; tiers from 240 MB + 6.5 GB down to blocks everywhere at about 9 MB + 45-60 MB; plan in 5 steps; the city floor already done for every map); the export must run on Morten's PC (the cloud has one square's triangles)
+- [x] S1d-G6: nothing broken
+  EVIDENCE: test_luac 3 of 3; test_world 58 of 62 (the 4 known); test_probe 35 of 35 (its call-count check now leaves out frames in which meshes were made, which the probe documents it does not count); test_terrain 3 of 5, the same 2 failing with the data before S1d (Hyjal far view mean 2.32 px both; zoom worst 9.24 -> 9.34 px); test_settings and test_choice fail identically with the code before S1d (the page list predates the poc branches; `c.key` API); smoke_shells 4 views drawn, 0 waiting; order_shells (fixed for meshes by set) wrong 0.09 / 0.20 / 0.21 / 0.09 % (near / close / high / far)
+- [x] S1d-G8: no ghost of the buildings on the ground
+  CHECK: run_page.py shellslook at the gate (3 views) and in the district (3 views), `/gps3d shells floor off` (minimap) against on
+  EVIDENCE: shots/cmp_gateA/B/C.png, cmp_near/close/canal.png viewed: the blurred white copy of the gate's towers and bridge on the water and the blue roof smears between the houses are gone with the floor picture; the picture: 2,048 px over 548 yd (3.74 px/yd), low streets 19 %, refilled under buildings / raised streets 40 %, raised streets 6.6 %
+- [ ] S1d-G7: committed + pushed (poc-shells, MortenMDahl), pages on Morten's PC, sandbox republished
   EVIDENCE: pending

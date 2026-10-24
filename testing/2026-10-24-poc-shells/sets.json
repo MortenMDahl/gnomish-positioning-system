@@ -1,0 +1,86 @@
+{
+ "sets": [
+  {
+   "var": "f_",
+   "lvl": 0,
+   "out": "shells_outf_",
+   "name": "finest shape, sharp pictures"
+  },
+  {
+   "var": "",
+   "lvl": 0,
+   "out": "shells_out",
+   "name": "finest shape, soft pictures"
+  },
+  {
+   "var": "e_",
+   "lvl": 1,
+   "out": "shells_oute_",
+   "name": "fine shape, sharp pictures"
+  },
+  {
+   "var": "",
+   "lvl": 1,
+   "out": "shells_out",
+   "name": "fine shape, soft pictures"
+  },
+  {
+   "var": "e_",
+   "lvl": 2,
+   "out": "shells_oute_",
+   "name": "medium shape, sharp pictures"
+  },
+  {
+   "var": "",
+   "lvl": 2,
+   "out": "shells_out",
+   "name": "medium shape, soft pictures"
+  },
+  {
+   "var": "e_",
+   "lvl": 3,
+   "out": "shells_oute_",
+   "name": "coarse shape, sharp pictures"
+  },
+  {
+   "var": "",
+   "lvl": 3,
+   "out": "shells_out",
+   "name": "coarse shape, soft pictures"
+  },
+  {
+   "var": "e_",
+   "lvl": 4,
+   "out": "shells_oute_",
+   "name": "whole blocks"
+  }
+ ],
+ "lod": [
+  [
+   0,
+   3
+  ],
+  [
+   70,
+   5
+  ],
+  [
+   125,
+   7
+  ],
+  [
+   300,
+   7
+  ],
+  [
+   580,
+   9
+  ]
+ ],
+ "floor": "sh_floorcells.json",
+ "jpg": "shells_sets",
+ "floor_image": [
+  "floor.jpg",
+  "sh_floorimg.json"
+ ]
+}

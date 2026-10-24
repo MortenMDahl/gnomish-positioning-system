@@ -18,6 +18,11 @@ NP = GRID * GRID
 CORNERS = (0, CELLS, CELLS * GRID, GRID * GRID - 1)
 
 
+# per tile (tx, ty) of the map being built: the grid points' weights in the error (None: all 1); set by
+# build_terrain_lod.py from the city shells' floor cells
+WEIGHTS = {}
+
+
 def decode(s):
     base = (VAL[s[0]] * 64 + VAL[s[1]]) * 64 + VAL[s[2]] - 131072
     return [(base + VAL[s[3 + i * 2]] * 64 + VAL[s[4 + i * 2]]) * 0.5 for i in range(NP)]
@@ -147,9 +152,10 @@ def _gain_arrays():
     return _DIAMONDS
 
 
-def own_errors(c, key):
+def own_errors(c, key, w=None):
     """per vertex: 'max' its height's distance from the middle of its parents; 'area' the error summed
-    over the grid points of its diamond that splitting there takes off"""
+    over the grid points of its diamond that splitting there takes off (each point's error times w, its
+    weight, if given: since 2026-10-24 the ground under a city's building shells counts less, WEIGHTS)"""
     e = np.zeros(NP)
     nz = DEPTH > 0
     if key == 'max':
@@ -158,6 +164,8 @@ def own_errors(c, key):
     vv, pp, bi, bw, ai, aw = _gain_arrays()
     before = np.abs((c[bi] * bw).sum(1) - c[pp])
     after = np.abs((c[ai] * aw).sum(1) - c[pp])
+    if w is not None:
+        before, after = before * w[pp], after * w[pp]
     np.add.at(e, vv, before - after)
     return np.maximum(e, 0)
 
@@ -173,11 +181,11 @@ def saturate(e):
     return s
 
 
-def order(c, key='area', extra=None):
+def order(c, key='area', extra=None, w=None):
     """the order vertices join the mesh (corners first; every prefix a valid mesh) and the triangle count
     of each prefix (ntris[k]: the first k + 1 vertices). extra: added to the vertices' own errors (the
     neighbours' halves of the edge points' diamonds, edge_errors)"""
-    e = own_errors(c, key)
+    e = own_errors(c, key, w)
     if extra is not None:
         e = e + extra
     s = saturate(e)
@@ -264,7 +272,7 @@ def edge_errors(world, tx, ty):
         nx, ny = tx + dx, ty + dy
         if not (0 <= nx < 64 and 0 <= ny < 64 and (ny * 64 + nx) in world):
             continue
-        e = own_errors(canon(world, nx, ny), 'area')
+        e = own_errors(canon(world, nx, ny), 'area', WEIGHTS.get((nx, ny)))
         for p in range(NP):
             if DEPTH[p] > 0 and _side(p) == side:
                 extra[p] = e[mirror(p, side)]
@@ -276,11 +284,11 @@ def _side(p):
     return 1 if j == 0 else 2 if i == CELLS else 3 if j == CELLS else 4 if i == 0 else 0
 
 
-def levels(c, extra=None):
+def levels(c, extra=None, w=None):
     """the shipped levels of a tile with heights c: per grid point the coarsest level that has it (lv), and
     per level its triangle count, its mean height error against c at the grid points and the depth of its
     largest triangles"""
-    seq, ntris = order(c, 'area', extra)
+    seq, ntris = order(c, 'area', extra, w)
     lv = np.zeros(NP, int)
     T, E, D = [], [], []
     for j in range(LEVELS):
@@ -288,7 +296,7 @@ def levels(c, extra=None):
         act = active_set(seq, k)
         lv[act] = j
         T.append(int(ntris[k - 1]))
-        E.append(float(np.abs(surface(c, act) - c).mean()))
+        E.append(float((np.abs(surface(c, act) - c) * (1 if w is None else w)).mean()))
         D.append(min(t[3] for t in leaves(act)))
     lv[list(CORNERS)] = LEVELS - 1
     return lv, T, E, D

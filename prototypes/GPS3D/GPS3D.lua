@@ -446,6 +446,10 @@ local function BuildGridMesh(map, tx, ty, level, sharp, f)
 	if file or sea then au, av, aw, ah = 0, 0, 1, 1 else file, au, av, aw, ah = OverviewOf(map, tx, ty) end
 	local tris = {}
 	mesh.tris = tris
+	-- a city's floor picture (Shells.lua) on the sharp tiles' triangles wholly inside its box
+	local fi = sharp and ns.floorImage
+	if fi and fi.map ~= map then fi = nil end
+	mesh.fis = ns.floorImageStamp
 	local ta, tb, tc = Lod.ta, Lod.tb, Lod.tc
 	local uScale, vScale = aw / TILE, ah / TILE
 	local free = pool.tris
@@ -461,10 +465,14 @@ local function BuildGridMesh(map, tx, ty, level, sharp, f)
 			t = { a = a, b = b, c = c, tex = AcquireTex(f), bucket = -1, frame = 1, shown = false, mesh = mesh }
 		end
 		-- building block under the triangle's centre (it is drawn behind a building block there)
-		local ex = (vx[a] + vx[b] + vx[c]) / 3 - x0
-		local sy = y0 - (vy[a] + vy[b] + vy[c]) / 3
+		local mx, my = (vx[a] + vx[b] + vx[c]) / 3, (vy[a] + vy[b] + vy[c]) / 3
+		local ex, sy = mx - x0, y0 - my
 		t.blk = min(BLOCKS - 1, floor(sy / BLOCK)) * BLOCKS + min(BLOCKS - 1, floor(ex / BLOCK))
-		if file then
+		t.mx, t.my, t.fs = mx, my, nil -- (its middle, and whether it is a city's floor: the draw loop's order with shells)
+		if fi and min(vx[a], vx[b], vx[c]) >= fi.x0 and max(vx[a], vx[b], vx[c]) <= fi.x1 and min(vy[a], vy[b], vy[c]) >= fi.y0 and max(vy[a], vy[b], vy[c]) <= fi.y1 then
+			local fx, fy, su, sv = fi.x0, fi.y1, fi.su, fi.sv
+			SetTriTexture(t, fi.file, (vx[a] - fx) * su, (fy - vy[a]) * sv, (vx[b] - fx) * su, (fy - vy[b]) * sv, (vx[c] - fx) * su, (fy - vy[c]) * sv)
+		elseif file then
 			SetTriTexture(t, file, au + (vx[a] - x0) * uScale, av + (y0 - vy[a]) * vScale, au + (vx[b] - x0) * uScale, av + (y0 - vy[b]) * vScale, au + (vx[c] - x0) * uScale, av + (y0 - vy[c]) * vScale)
 		elseif sea then
 			SetTriColour(t, sea[1], sea[2], sea[3])
@@ -798,6 +806,7 @@ local function BuildBlockMesh(g)
 			free[nf], free.n = nil, nf - 1
 			t.a, t.b, t.c, t.tex, t.bucket, t.frame, t.shown, t.mesh, t.clipped, t.blk = a, b, c, AcquireTex(), -1, 1, false, mesh, nil, nil
 			t.x1, t.y1, t.x2, t.y2, t.x3, t.y3 = nil, nil, nil, nil, nil, nil
+			t.mx, t.my, t.fs = nil, nil, nil
 		else
 			t = { a = a, b = b, c = c, tex = AcquireTex(), bucket = -1, frame = 1, shown = false, mesh = mesh }
 		end
@@ -1880,6 +1889,7 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 		local sharp = TILE * F / max(c.d, 1) > MINIMAP_PX
 		local key = ((mapKey + c.key) * 64 + level) * 2 + (sharp and 1 or 0) -- grid meshes: a positive number
 		local mesh = meshes[key]
+		if mesh and mesh.fis ~= ns.floorImageStamp and sharp then ReleaseMesh(key); mesh = nil end -- (a city's floor picture came or went)
 		if not mesh and c.grid then
 			-- (the depth frame it will likely be drawn in, from last frame's depth range: AcquireTex)
 			local f = floor((stats.dmax - c.d) * (TOTAL_BUCKETS - 0.001) / max(stats.dmax - stats.dmin, 1e-6) / LAYER_BUCKETS) + 1
@@ -2001,12 +2011,26 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 		if hi > dmax then dmax = hi end
 	end
 	-- cull, sort into buckets and draw: one pass over the triangles
-	-- (proof of concept S1, Shells.lua: building shells drawn above the ground in buckets of their own, ordered by
-	-- their faces' horizontal distance from the camera, log-spaced; the ground keeps the first sr.ground buckets)
+	-- (proof of concept S1, Shells.lua: with building shells in view, everything, ground and old blocks too, is
+	-- ordered by its middle's horizontal distance from the camera (since 2026-10-24; before, the shells had buckets of
+	-- their own above all the ground's, so a mountain in front never hid them): log-spaced, most buckets over the
+	-- shells' range (sr.kmin to sr.kmax), SN for what is nearer and SF for what is further (up to 64 x sr.kmax);
+	-- the ground under a city with shells as if sr.floorBias further, under an old block DETAIL_BIAS)
 	local sr, tb, skl, sks, skmin, log = ns.shellRange, TOTAL_BUCKETS, nil, nil, 1, math.log
-	if sr and sr.on then tb = sr.ground; skmin = sr.kmin; skl = log(skmin); sks = (TOTAL_BUCKETS - tb - 0.001) / max(log(sr.kmax) - skl, 1e-6) end
+	local skmax, sn, sm, sf, bx0, fbias, fstamp
+	if sr and sr.on then
+		tb = 0
+		skmin, skmax = sr.kmin, sr.kmax
+		skl = log(skmin)
+		sn, sf = sr.near or 48, sr.far or 128
+		sm = TOTAL_BUCKETS - sn - sf
+		sks = (sm - 0.001) / max(log(skmax) - skl, 1e-6)
+		bx0 = sr.floor -- (the ground grid's cells under the shells' tops: the city's floor)
+		fbias, fstamp = sr.floorBias or 25, sr.fstamp or 0
+	end
 	local scale = (tb - 0.001) / max(dmax - dmin, 1e-6)
 	stats.dmin, stats.dmax = dmin, dmax
+	stats.active, stats.nActive = active, nActive -- (for the sandbox's draw-order check, order_all.py)
 	do local w, h = canvas:GetSize(); clipW, clipH = w / 2 + 2, h / 2 + 2 end
 	local visible, nVisible, culled, behind, cut = stats.visible or {}, 0, 0, 0, 0
 	stats.visible = visible
@@ -2081,17 +2105,45 @@ local function RenderWorld(F, fx, fy, fz, rx, ry, ux, uy, uz, cx, cy, cz)
 					depth = depth - DETAIL_BIAS
 				end
 				local bucket
-				if skl and mesh.hk then
-					local mx, my = t.mx, t.my -- (the face's middle, worked out when Shells.lua decoded it)
-					if mx then mx, my = mx - cx, my - cy
-					else
+				if skl then
+					local hk = mesh.hk
+					local mx, my = t.mx, t.my -- (the middle: a shell face's from Shells.lua's decode, a ground triangle's from its build)
+					if not mx then
 						local vx_, vy_ = mesh.vx, mesh.vy
-						if q4 then mx, my = (vx_[a] + vx_[b] + vx_[c] + vx_[q4]) / 4 - cx, (vy_[a] + vy_[b] + vy_[c] + vy_[q4]) / 4 - cy
-						else mx, my = (vx_[a] + vx_[b] + vx_[c]) / 3 - cx, (vy_[a] + vy_[b] + vy_[c]) / 3 - cy end
+						if q4 then mx, my = (vx_[a] + vx_[b] + vx_[c] + vx_[q4]) / 4, (vy_[a] + vy_[b] + vy_[c] + vy_[q4]) / 4
+						else mx, my = (vx_[a] + vx_[b] + vx_[c]) / 3, (vy_[a] + vy_[b] + vy_[c]) / 3 end
+						if not hk then t.mx, t.my = mx, my end
 					end
-					local k = sqrt(mx * mx + my * my)
-					bucket = TOTAL_BUCKETS - 1 - floor((log(k > skmin and k or skmin) - skl) * sks)
-					if bucket < tb then bucket = tb elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
+					local bias = 0
+					if not hk then
+						-- the city's floor (its middle or a corner in a cell under the shells' tops, sr.floor: 16.67-yd cells, 0.06 = 1 / 16.67):
+						-- further by fbias and 0.6 of its size, so even a big far triangle of a flat floor goes behind the shells on it;
+						-- worked out once per triangle and city data (sr.fstamp)
+						local fb = t.fb
+						if t.fs ~= fstamp then
+							fb = 0
+							if bx0 and not q4 then
+								local vx_, vy_ = mesh.vx, mesh.vy
+								local xa, xb, xc, ya, yb, yc = vx_[a], vx_[b], vx_[c], vy_[a], vy_[b], vy_[c]
+								if bx0[floor(-my * 0.06) * 4096 + floor(mx * 0.06)] or bx0[floor(-ya * 0.06) * 4096 + floor(xa * 0.06)]
+									or bx0[floor(-yb * 0.06) * 4096 + floor(xb * 0.06)] or bx0[floor(-yc * 0.06) * 4096 + floor(xc * 0.06)] then
+									local ex = (xa > xb and xa or xb); ex = (ex > xc and ex or xc) - min(xa, xb, xc)
+									local ey = (ya > yb and ya or yb); ey = (ey > yc and ey or yc) - min(ya, yb, yc)
+									fb = fbias + 0.6 * (ex > ey and ex or ey)
+								end
+							end
+							t.fb, t.fs = fb, fstamp
+						end
+						bias = fb > 0 and fb or (under and under[t.blk] and DETAIL_BIAS or 0)
+					end
+					mx, my = mx - cx, my - cy
+					local k = sqrt(mx * mx + my * my) + bias
+					local p
+					if k < skmin then p = (k > 1 and skl > 0) and sn * log(k) / skl or 0
+					elseif k <= skmax then p = sn + (log(k) - skl) * sks
+					else p = sn + sm + sf * log(k / skmax) / 4.1589 end -- (4.1589: log 64)
+					bucket = TOTAL_BUCKETS - 1 - floor(p)
+					if bucket < 0 then bucket = 0 elseif bucket >= TOTAL_BUCKETS then bucket = TOTAL_BUCKETS - 1 end
 				else
 					bucket = floor((dmax - depth) * scale)
 					if bucket < 0 then bucket = 0 elseif bucket >= tb then bucket = tb - 1 end

@@ -9,7 +9,7 @@
 # PACK=hilbert: pictures grouped by where their unit stands (a Hilbert curve over 16 x 16 cells of the square), a page's worth
 # at a time, so a page holds one part of the city and a view needs few pages in texture memory; else tallest first.
 import sys, os, json, pickle, numpy as np
-L = int(sys.argv[1]); PPY = float(sys.argv[2]); VAR = os.environ.get('VAR', ''); PACK = os.environ.get('PACK', '')
+L = int(sys.argv[1]); PPY = float(sys.argv[2]); VAR = os.environ.get('VAR', ''); PACK = os.environ.get('PACK', ''); OWN = os.environ.get('OWN', '1') == '1'
 PAGE, PAD = 2048, 2
 SLAB = {'wall': (3.0, 5.0), 'roof': (15.0, 3.0)}   # yd in front of (outside) / behind the face
 R = pickle.load(open(f'sh_shells_{L}.pkl', 'rb')); F = np.load(f'sh_vis_{L}.npz')['front']
@@ -124,7 +124,13 @@ def near_units(p):
     cs = np.array([p['o'] + p['u'] * a + p['v'] * b + p['n'] * c for a in (p['u0'], p['u1']) for b in (p['v0'], p['v1']) for c in (-bk, fr)])
     lo, hi = cs.min(0), cs.max(0)
     ok = np.all(UBX[:, :3] <= hi + 0.5, 1) & np.all(UBX[:, 3:] >= lo - 0.5, 1)
-    return [int(x) for x in UK[ok]]
+    near = [int(x) for x in UK[ok]]
+    if OWN and L < 4 and p['kind'] == 'roof':
+        # (since 2026-10-24) a roof's picture only of its own building, a street's only of the streets: a neighbour's bridge or
+        # eave inside the slab was baked onto it and showed twice, as the 3D shell and as a flat picture under it. Walls keep
+        # their neighbours (a wall between two units shows the taller one's facade); the blocks (level 4) keep everything.
+        return [u for u in near if u <= -1000] if p['unit'] < 0 else [u for u in near if u == p['unit']]
+    return near
 def gl(v): return [float(v[0]), float(v[2]), float(-v[1])]
 jobs = [[] for _ in range(npages)]
 for p in pics:
